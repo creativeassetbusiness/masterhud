@@ -456,6 +456,7 @@ function setupActions() {
   $("tabletReadinessBtn")?.addEventListener("click", () => postAction("/api/actions/tablet-readiness", {}, "Tablet readiness"));
   $("scanBtn")?.addEventListener("click", () => postAction("/api/actions/run-security-scan", {}, "Security scan"));
   $("updateScanBtn")?.addEventListener("click", () => postAction("/api/actions/run-update-scan", {}, "Update scan"));
+  $("updateBriefBtn")?.addEventListener("click", () => postAction("/api/actions/update-brief", {}, "Update brief"));
   $("logonBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
   $("refreshHudBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
   $("applyProfileBtn")?.addEventListener("click", async () => {

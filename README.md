@@ -77,6 +77,8 @@ MasterHUD detects updates but does not install them automatically.
 
 Use the `Update Scan` button in the Operator Console to refresh this data on demand. Do installs manually during a maintenance window after checking backups and service health.
 
+Use the `Update Brief` button for a read-only preflight report. It lists current and available versions, marks high/medium/low risk, and gives the release-note or local lookup command to review before installing anything.
+
 ## What It Watches
 
 - CPU pressure and per-sample history

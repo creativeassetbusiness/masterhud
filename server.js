@@ -744,6 +744,10 @@ foreach ($update in $result.Updates) {
     title = $update.Title
     isDownloaded = $update.IsDownloaded
     rebootRequired = $update.RebootRequired
+    kbArticleIds = @($update.KBArticleIDs)
+    msrcSeverity = $update.MsrcSeverity
+    supportUrl = $update.SupportUrl
+    categories = @($update.Categories | ForEach-Object { $_.Name })
   }
 }
 [pscustomobject]@{ count=$result.Updates.Count; updates=$updates } | ConvertTo-Json -Depth 5 -Compress
@@ -863,6 +867,172 @@ async function monitorUpdateWatch(windows) {
     gitDrift,
     versions
   };
+}
+
+const riskOrder = { low: 0, medium: 1, high: 2 };
+
+function maxRisk(...levels) {
+  return levels.reduce((winner, level) => (riskOrder[level] > riskOrder[winner] ? level : winner), "low");
+}
+
+function versionTriplet(value) {
+  const match = String(value || "").match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
+}
+
+function versionChangeRisk(current, available) {
+  const from = versionTriplet(current);
+  const to = versionTriplet(available);
+  if (!from || !to) return { level: "medium", reason: "version format needs manual review" };
+  if (to.major > from.major) return { level: "high", reason: "major version change" };
+  if (to.minor > from.minor) return { level: "medium", reason: "minor version change" };
+  if (to.patch > from.patch) return { level: "low", reason: "patch version change" };
+  return { level: "low", reason: "same major/minor/patch family" };
+}
+
+function npmPackageUrl(name) {
+  return `https://www.npmjs.com/package/${encodeURIComponent(name).replace(/%2F/g, "/")}`;
+}
+
+function windowsUpdateRisk(update) {
+  const text = `${update.title || ""} ${normalizeArray(update.categories).join(" ")} ${update.msrcSeverity || ""}`.toLowerCase();
+  let level = /defender|security intelligence/.test(text) ? "low" : "medium";
+  const reasons = [];
+  if (/defender|security intelligence/.test(text)) {
+    reasons.push("Defender intelligence updates are usually low app-break risk");
+  }
+  if (/cumulative|servicing stack|\.net|framework|visual c\+\+|runtime/.test(text)) {
+    level = maxRisk(level, "medium");
+    reasons.push("system/runtime update can affect services or require reboot");
+  }
+  if (/driver|firmware|guest|virtio/.test(text)) {
+    level = maxRisk(level, "high");
+    reasons.push("driver or VM guest tooling update");
+  }
+  if (update.rebootRequired) reasons.push("reboot required");
+  return { level, reason: reasons.join("; ") || "review KB/support notes before install" };
+}
+
+function wingetUpdateRisk(item) {
+  const text = `${item.name || ""} ${item.id || ""}`.toLowerCase();
+  let level = "medium";
+  const reasons = [];
+  if (/postgres|postgresql|caddy|node|nodejs|git|nssm|openssl|tailscale/.test(text)) {
+    level = maxRisk(level, "high");
+    reasons.push("core runtime or infrastructure tool");
+  }
+  if (/virtio|driver|guest|vmware|hyper-v/.test(text)) {
+    level = maxRisk(level, "high");
+    reasons.push("VM guest/driver tooling");
+  }
+  if (/visual c\+\+|redistributable|runtime|\.net/.test(text)) {
+    level = maxRisk(level, "medium");
+    reasons.push("shared Windows runtime dependency");
+  }
+  return { level, reason: reasons.join("; ") || "third-party package update" };
+}
+
+function npmUpdateRisk(pkg) {
+  const versionRisk = versionChangeRisk(pkg.current, pkg.latest || pkg.wanted);
+  const text = `${pkg.name || ""} ${pkg.type || ""}`.toLowerCase();
+  let level = versionRisk.level;
+  const reasons = [versionRisk.reason];
+  if (/pg|postgres|mysql|mssql|sqlite|sequelize|prisma|typeorm/.test(text)) {
+    level = maxRisk(level, "high");
+    reasons.push("database driver or database access package");
+  } else if (/express|fastify|koa|passport|jsonwebtoken|bcrypt|cookie|session|auth|caddy|sharp/.test(text)) {
+    level = maxRisk(level, "medium");
+    reasons.push("server/auth/media package");
+  }
+  if (/dependencies|prod|production/.test(text)) {
+    level = maxRisk(level, "medium");
+    reasons.push("production dependency");
+  }
+  return { level, reason: reasons.join("; ") };
+}
+
+function updateSection(title, rows, emptyText) {
+  const lines = [``, title];
+  if (!rows.length) {
+    lines.push(`- ${emptyText}`);
+    return lines;
+  }
+  return lines.concat(rows);
+}
+
+function buildUpdateBrief(watch = {}) {
+  const windowsUpdates = normalizeArray(watch.windows?.updates);
+  const winget = normalizeArray(watch.winget?.upgrades);
+  const npmWorkloads = normalizeArray(watch.npmOutdated?.workloads);
+  const npmPackages = npmWorkloads.flatMap((workload) => normalizeArray(workload.packages).map((pkg) => ({ workload: workload.workload, directory: workload.directory, ...pkg })));
+  const repos = normalizeArray(watch.gitDrift?.repos);
+  const versions = normalizeArray(watch.versions?.commands);
+  const pending = windowsUpdates.length + winget.length + npmPackages.length + repos.filter((repo) => /\bbehind\b|\[ahead|\?\?|^\s*M|^\s*A|^\s*D/im.test(repo.status || "")).length;
+  const lines = [
+    "UPDATE BRIEF - read-only",
+    `Profile: ${config.profile?.label || config.profile?.active || "Default"}`,
+    `Captured: ${watch.capturedAt || new Date().toISOString()}`,
+    `Pending update signals: ${pending}`,
+    "Nothing was installed, upgraded, restarted, or changed."
+  ];
+
+  if (versions.length) {
+    lines.push("", "CURRENT RUNTIME VERSIONS");
+    for (const item of versions) {
+      lines.push(`- ${item.name}: ${item.output || item.error || "unknown"}${item.ok ? "" : " (check failed)"}`);
+    }
+  }
+
+  lines.push(...updateSection("WINDOWS UPDATE", windowsUpdates.map((update) => {
+    const risk = windowsUpdateRisk(update);
+    const kb = normalizeArray(update.kbArticleIds).filter(Boolean).map((id) => `KB${id}`).join(", ") || "KB not reported";
+    const categories = normalizeArray(update.categories).filter(Boolean).join(", ") || "no category reported";
+    return [
+      `- [${risk.level.toUpperCase()}] ${update.title || "Pending Windows update"}`,
+      `  current: installed Windows baseline | available: ${kb}`,
+      `  reboot: ${update.rebootRequired ? "yes" : "not reported"} | categories: ${categories}`,
+      `  look ahead: ${update.supportUrl || "review the KB/support notes in Windows Update"} | ${risk.reason}`
+    ].join("\n");
+  }), "No pending Windows updates detected."));
+
+  lines.push(...updateSection("WINGET PACKAGES", winget.map((item) => {
+    const risk = wingetUpdateRisk(item);
+    return [
+      `- [${risk.level.toUpperCase()}] ${item.name || item.id || "winget package"}`,
+      `  id: ${item.id || "unknown"} | source: ${item.source || "unknown"}`,
+      `  current: ${item.version || "unknown"} | available: ${item.available || "unknown"}`,
+      `  look ahead: winget show --id ${item.id || "<package-id>"} --accept-source-agreements | ${risk.reason}`
+    ].join("\n");
+  }), "No winget package upgrades detected."));
+
+  lines.push(...updateSection("NPM PACKAGES", npmPackages.map((pkg) => {
+    const risk = npmUpdateRisk(pkg);
+    return [
+      `- [${risk.level.toUpperCase()}] ${pkg.workload || "workload"} / ${pkg.name}`,
+      `  current: ${pkg.current || "unknown"} | wanted: ${pkg.wanted || "unknown"} | latest: ${pkg.latest || "unknown"} | type: ${pkg.type || "unknown"}`,
+      `  look ahead: ${npmPackageUrl(pkg.name)} | npm view ${pkg.name} version time repository homepage`,
+      `  test before install: npm ci --ignore-scripts, app health, tablet readiness, and service restart on a branch`,
+      `  risk note: ${risk.reason}`
+    ].join("\n");
+  }), "No npm package updates detected."));
+
+  lines.push(...updateSection("GIT REPOS", repos.map((repo) => [
+    `- ${repo.workload || "repo"}: ${repo.status || "unknown"}`,
+    `  branch: ${repo.branch || "unknown"} | head: ${repo.head || "unknown"}`,
+    `  directory: ${repo.directory || "unknown"}`
+  ].join("\n")), "No Git repositories configured."));
+
+  lines.push(
+    "",
+    "LOOK-AHEAD RULES BEFORE INSTALL",
+    "- Read release notes or KB notes first, especially for database drivers, Node/Caddy/PostgreSQL, VM guest tools, and Windows runtime updates.",
+    "- Take/confirm backups before app/runtime/database updates. For VM driver or Windows runtime updates, use a maintenance window and keep console access available.",
+    "- Update one class at a time: app npm packages, Windows Update, winget runtime tools. Do not bundle risky changes together.",
+    "- After installing: verify app health, Caddy validate, tablet readiness, public HTTPS, DB counts, and service restart state."
+  );
+
+  return lines.join("\n");
 }
 
 async function safeSlowMonitor(name, fn, fallback) {
@@ -1850,6 +2020,21 @@ async function handleAction(req, res, pathname) {
       slowSecurity.capturedAt = null;
       collect();
       sendJson(res, 202, { ok: true, message: "Update scan requested. Refresh HUD in a minute if results are still warming." });
+      return true;
+    }
+
+    if (pathname === "/api/actions/update-brief") {
+      const windows = latest?.windows || await windowsSnapshot();
+      const watch = await monitorUpdateWatch(windows);
+      if (latest?.windows?.security) {
+        latest.windows.security.updateWatch = watch;
+        broadcast(latest);
+      }
+      sendJson(res, 200, {
+        ok: true,
+        message: "Read-only update brief generated. Nothing was installed or changed.",
+        stdout: buildUpdateBrief(watch)
+      });
       return true;
     }
   } catch (error) {

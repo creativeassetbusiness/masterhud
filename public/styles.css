@@ -682,7 +682,7 @@ button:hover {
 
 .action-output {
   min-height: 58px;
-  max-height: 150px;
+  max-height: 330px;
   margin: 2px 0 0;
   padding: 9px;
   overflow: auto;
