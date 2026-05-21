@@ -525,6 +525,12 @@ canvas {
   gap: 8px;
 }
 
+.profile-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 104px;
+  gap: 8px;
+}
+
 .quick-links,
 .tool-grid {
   display: grid;
@@ -744,6 +750,7 @@ button:hover {
   .log-row,
   .alert-row,
   .action-row,
+  .profile-row,
   .quick-links,
   .tool-grid,
   .blocked-row { grid-template-columns: 1fr; }

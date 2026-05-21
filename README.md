@@ -24,9 +24,9 @@ $env:SAMPLE_MS=3000
 npm start
 ```
 
-## Configure A Client Server
+## Configure Client Profiles
 
-Copy the example config and edit it for each VPS:
+For a single-server install, copy the example config and edit it:
 
 ```powershell
 Copy-Item .\masterhud.config.example.json .\masterhud.config.json
@@ -34,6 +34,24 @@ notepad .\masterhud.config.json
 ```
 
 `masterhud.config.json` is intentionally ignored by Git because it contains client-specific domains, local paths, and service names.
+
+For multi-client work, use local profiles instead:
+
+```powershell
+New-Item -ItemType Directory -Force .\profiles
+Copy-Item .\profiles\client.example.json .\profiles\client-a.json
+notepad .\profiles\client-a.json
+```
+
+Then select the profile from the Operator Console, or preselect one by creating `data\active-profile.json`:
+
+```json
+{
+  "profile": "client-a"
+}
+```
+
+Profile files are ignored by Git except `*.example.json`, so every VPS can keep its own client paths, domains, services, and quick links while sharing the same public MasterHUD code.
 
 Useful config fields:
 
@@ -68,6 +86,7 @@ Useful config fields:
 The following are runtime/local files and are ignored:
 
 - `masterhud.config.json`
+- `profiles/*.json` except `profiles/*.example.json`
 - `data/*.json`, `data/*.jsonl`
 - `security/allowlist.txt`
 - Defender onboarding packages, logs, temp files, and zip files

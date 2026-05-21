@@ -1,6 +1,8 @@
 data/*
 !data/.gitkeep
 masterhud.config.json
+profiles/*.json
+!profiles/*.example.json
 security/allowlist.txt
 *.log
 *.tmp

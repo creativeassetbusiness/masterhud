@@ -17,38 +17,98 @@ const alertConfigPath = path.join(dataDir, "alerts-config.json");
 const alertLogPath = path.join(dataDir, "alerts.jsonl");
 const historyPath = path.join(dataDir, "history.jsonl");
 const configPath = path.join(__dirname, "masterhud.config.json");
+const profilesDir = path.join(__dirname, "profiles");
+const activeProfilePath = path.join(dataDir, "active-profile.json");
 const port = Number(process.env.PORT || 3927);
 const sampleMs = Number(process.env.SAMPLE_MS || 5000);
 const slowSecurityMs = Number(process.env.SLOW_SECURITY_MS || 10 * 60 * 1000);
 const powerShellExe = process.env.MASTERHUD_POWERSHELL || "powershell.exe";
 
-async function loadConfig() {
-  const defaults = {
-    publicUrls: [],
-    expectedWorkloads: [],
-    managedServices: [],
-    requiredServices: [],
-    requiredPorts: [80, 443],
-    appRoot: "",
-    healthUrl: "",
-    caddyConfigPath: "",
-    caddyCandidates: [
-      "C:\\Program Files\\Caddy\\caddy.exe",
-      "C:\\caddy\\caddy.exe"
-    ],
-    tabletReadinessCommand: "",
-    quickLinks: []
-  };
+const defaultConfig = {
+  publicUrls: [],
+  expectedWorkloads: [],
+  managedServices: [],
+  requiredServices: [],
+  requiredPorts: [80, 443],
+  appRoot: "",
+  healthUrl: "",
+  caddyConfigPath: "",
+  caddyCandidates: [
+    "C:\\Program Files\\Caddy\\caddy.exe",
+    "C:\\caddy\\caddy.exe"
+  ],
+  readinessCommands: [],
+  tabletReadinessCommand: "",
+  quickLinks: []
+};
 
+function validProfileName(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9._-]{1,80}$/.test(value) && !value.includes("..");
+}
+
+function profileConfigPath(profileName) {
+  if (!validProfileName(profileName)) return null;
+  return path.join(profilesDir, `${profileName}.json`);
+}
+
+async function readOptionalJson(filePath, fallback = null) {
   try {
-    const raw = await fs.readFile(configPath, "utf8");
-    return { ...defaults, ...JSON.parse(raw.replace(/^\uFEFF/, "")) };
+    return JSON.parse((await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, ""));
   } catch {
-    return defaults;
+    return fallback;
   }
 }
 
-const config = await loadConfig();
+async function getSelectedProfileName(baseConfig = {}) {
+  if (validProfileName(process.env.MASTERHUD_PROFILE)) return process.env.MASTERHUD_PROFILE;
+  const active = await readOptionalJson(activeProfilePath, {});
+  if (validProfileName(active?.profile)) return active.profile;
+  if (validProfileName(baseConfig.activeProfile)) return baseConfig.activeProfile;
+  return "";
+}
+
+async function loadConfig() {
+  const baseConfig = await readOptionalJson(configPath, {});
+  const selectedProfile = await getSelectedProfileName(baseConfig);
+  const profilePath = profileConfigPath(selectedProfile);
+  const profileConfig = profilePath ? await readOptionalJson(profilePath, {}) : {};
+  const loaded = { ...defaultConfig, ...baseConfig, ...profileConfig };
+  loaded.profile = {
+    active: selectedProfile,
+    label: loaded.label || selectedProfile || "Default",
+    source: profilePath && Object.keys(profileConfig).length ? profilePath : (Object.keys(baseConfig).length ? configPath : "defaults")
+  };
+  return loaded;
+}
+
+async function listProfiles() {
+  let entries = [];
+  try {
+    entries = await fs.readdir(profilesDir, { withFileTypes: true });
+  } catch {}
+  const profiles = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    const name = entry.name.replace(/\.json$/i, "");
+    if (!validProfileName(name)) continue;
+    const filePath = path.join(profilesDir, entry.name);
+    const profile = await readOptionalJson(filePath, {});
+    profiles.push({
+      name,
+      label: profile.label || name,
+      source: filePath,
+      example: entry.name.endsWith(".example.json")
+    });
+  }
+  return profiles.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+let config = await loadConfig();
+
+async function reloadConfig() {
+  config = await loadConfig();
+  return config;
+}
 
 let previousCpu = os.cpus();
 let previousNet = null;
@@ -1394,10 +1454,17 @@ function configuredServiceName(value) {
   return typeof value === "string" ? value : value?.name;
 }
 
-const appRoot = config.appRoot || __dirname;
-const managedServiceNames = normalizeArray(config.managedServices).map(configuredServiceName).filter(Boolean);
-const manageableServices = new Set(managedServiceNames);
-const caddyCandidates = normalizeArray(config.caddyCandidates).filter(Boolean);
+function currentAppRoot() {
+  return config.appRoot || __dirname;
+}
+
+function currentManageableServices() {
+  return new Set(normalizeArray(config.managedServices).map(configuredServiceName).filter(Boolean));
+}
+
+function currentCaddyCandidates() {
+  return normalizeArray(config.caddyCandidates).filter(Boolean);
+}
 
 async function firstExistingPath(paths) {
   for (const candidate of paths) {
@@ -1407,7 +1474,7 @@ async function firstExistingPath(paths) {
 }
 
 async function runServiceAction(name, action) {
-  if (!manageableServices.has(name)) {
+  if (!currentManageableServices().has(name)) {
     return { ok: false, stdout: "", stderr: "service is not in the MasterHUD allow-list" };
   }
   const safeName = name.replace(/'/g, "''");
@@ -1434,6 +1501,24 @@ async function handleAction(req, res, pathname) {
 
   try {
     const body = await readRequestJson(req);
+    if (pathname === "/api/actions/set-profile") {
+      const profile = String(body.profile || "").trim();
+      if (profile && !validProfileName(profile)) {
+        sendJson(res, 400, { ok: false, error: "profile name must use letters, numbers, dot, underscore, or dash" });
+        return true;
+      }
+      if (profile && !(await pathExists(profileConfigPath(profile)))) {
+        sendJson(res, 404, { ok: false, error: "profile file was not found" });
+        return true;
+      }
+      await writeJsonFile(activeProfilePath, { profile, updatedAt: new Date().toISOString() });
+      await reloadConfig();
+      slowSecurity.capturedAt = null;
+      collect();
+      sendJson(res, 200, { ok: true, message: profile ? `Active profile switched to ${profile}.` : "Active profile reset to default config.", profile: config.profile });
+      return true;
+    }
+
     if (pathname === "/api/actions/block-ip" || pathname === "/api/actions/unblock-ip") {
       if (!validIp(body.ip)) {
         sendJson(res, 400, { ok: false, error: "valid ip is required" });
@@ -1487,7 +1572,7 @@ async function handleAction(req, res, pathname) {
         sendJson(res, 400, { ok: false, error: "caddyConfigPath is not configured in masterhud.config.json" });
         return true;
       }
-      const caddyExe = await firstExistingPath(caddyCandidates);
+      const caddyExe = await firstExistingPath(currentCaddyCandidates());
       if (!caddyExe) {
         sendJson(res, 500, { ok: false, error: "caddy.exe not found" });
         return true;
@@ -1498,7 +1583,7 @@ async function handleAction(req, res, pathname) {
         config.caddyConfigPath,
         "--adapter",
         "caddyfile"
-      ], appRoot, 60000);
+      ], currentAppRoot(), 60000);
       sendJson(res, result.ok ? 200 : 500, { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error });
       return true;
     }
@@ -1508,7 +1593,7 @@ async function handleAction(req, res, pathname) {
         sendJson(res, 400, { ok: false, error: "tabletReadinessCommand is not configured in masterhud.config.json" });
         return true;
       }
-      const result = await runCommand("cmd.exe", ["/d", "/s", "/c", config.tabletReadinessCommand], appRoot, 120000);
+      const result = await runCommand("cmd.exe", ["/d", "/s", "/c", config.tabletReadinessCommand], currentAppRoot(), 120000);
       sendJson(res, result.ok ? 200 : 500, { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error });
       return true;
     }
@@ -1582,6 +1667,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === "/api/operator-config") {
     sendJson(res, 200, {
       ok: true,
+      profile: config.profile,
+      profiles: await listProfiles(),
       quickLinks: normalizeArray(config.quickLinks),
       managedServices: normalizeArray(config.managedServices)
     });

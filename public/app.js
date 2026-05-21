@@ -11,7 +11,7 @@ const maxHistory = 80;
 
 const fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const intFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-let operatorConfig = { quickLinks: [], managedServices: [] };
+let operatorConfig = { quickLinks: [], managedServices: [], profiles: [], profile: { active: "" } };
 
 function esc(value) {
   return String(value ?? "")
@@ -305,6 +305,16 @@ function renderRecommendations(tips = []) {
 }
 
 function renderOperatorConfig() {
+  const profiles = Array.isArray(operatorConfig.profiles) ? operatorConfig.profiles : [];
+  $("profileSelect").innerHTML = [
+    `<option value="">Default config</option>`,
+    ...profiles.map((profile) => {
+      const suffix = profile.example ? " (example)" : "";
+      const selected = profile.name === operatorConfig.profile?.active ? " selected" : "";
+      return `<option value="${esc(profile.name)}"${selected}>${esc(profile.label || profile.name)}${suffix}</option>`;
+    })
+  ].join("");
+
   const links = Array.isArray(operatorConfig.quickLinks) ? operatorConfig.quickLinks : [];
   $("quickLinks").innerHTML = links.map((link) => `<a class="button-link" href="${esc(link.href)}" target="_blank" rel="noopener">${esc(link.label || link.href)}</a>`).join("")
     || `<span class="muted-note">Configure quick links in masterhud.config.json.</span>`;
@@ -393,6 +403,10 @@ function setupActions() {
   $("scanBtn")?.addEventListener("click", () => postAction("/api/actions/run-security-scan", {}, "Security scan"));
   $("logonBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
   $("refreshHudBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
+  $("applyProfileBtn")?.addEventListener("click", async () => {
+    await postAction("/api/actions/set-profile", { profile: $("profileSelect").value }, "Switch profile");
+    await loadOperatorConfig();
+  });
   $("blockedIpList")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-unblock-ip]");
     if (!button) return;

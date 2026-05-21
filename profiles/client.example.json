@@ -1,0 +1,59 @@
+{
+  "label": "Example Client VPS",
+  "publicUrls": [
+    "https://example.com",
+    "https://app.example.com"
+  ],
+  "expectedWorkloads": [
+    {
+      "DisplayName": "Example Website",
+      "Name": "ExampleWebsite",
+      "AppDirectory": "C:\\apps\\example-website"
+    }
+  ],
+  "managedServices": [
+    {
+      "name": "ExampleWebsite",
+      "label": "Example Website"
+    },
+    {
+      "name": "CaddyProxy",
+      "label": "Caddy"
+    },
+    {
+      "name": "postgresql-x64-17",
+      "label": "PostgreSQL"
+    }
+  ],
+  "requiredServices": [
+    "ExampleWebsite",
+    "CaddyProxy",
+    "postgresql-x64-17"
+  ],
+  "requiredPorts": [80, 443],
+  "appRoot": "C:\\apps\\example-website",
+  "healthUrl": "http://127.0.0.1:8080/api/health",
+  "caddyConfigPath": "C:\\apps\\example-website\\Caddyfile",
+  "caddyCandidates": [
+    "C:\\Program Files\\Caddy\\caddy.exe",
+    "C:\\caddy\\caddy.exe"
+  ],
+  "readinessCommands": [
+    {
+      "id": "health",
+      "label": "App Health",
+      "command": "npm run verify:health"
+    }
+  ],
+  "tabletReadinessCommand": "",
+  "quickLinks": [
+    {
+      "label": "Open App",
+      "href": "https://app.example.com/"
+    },
+    {
+      "label": "Health JSON",
+      "href": "http://127.0.0.1:8080/api/health"
+    }
+  ]
+}
