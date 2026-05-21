@@ -1,0 +1,13 @@
+{
+  "name": "masterhud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Intrusive local Windows server HUD for system, process, port, and service visibility.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

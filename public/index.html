@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MasterHUD</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>MasterHUD</h1>
+          <p id="hostLine">Warming up telemetry...</p>
+        </div>
+        <div class="status-stack">
+          <span id="connection" class="pill warn">connecting</span>
+          <span id="clock" class="clock">--:--:--</span>
+        </div>
+      </header>
+
+      <section class="kpi-grid" aria-label="System pressure">
+        <article class="meter" data-kind="cpu">
+          <div class="meter-head"><span>CPU</span><strong id="cpuValue">--%</strong></div>
+          <div class="bar"><i id="cpuBar"></i></div>
+          <canvas id="cpuSpark" width="360" height="76"></canvas>
+        </article>
+        <article class="meter" data-kind="memory">
+          <div class="meter-head"><span>Memory</span><strong id="memValue">--%</strong></div>
+          <div class="bar"><i id="memBar"></i></div>
+          <canvas id="memSpark" width="360" height="76"></canvas>
+        </article>
+        <article class="meter" data-kind="disk">
+          <div class="meter-head"><span>Disk I/O</span><strong id="diskValue">--</strong></div>
+          <div class="split-row"><span id="diskRead">R --</span><span id="diskWrite">W --</span></div>
+          <canvas id="diskSpark" width="360" height="76"></canvas>
+        </article>
+        <article class="meter" data-kind="network">
+          <div class="meter-head"><span>Network</span><strong id="netValue">--</strong></div>
+          <div class="split-row"><span id="netRx">Down --</span><span id="netTx">Up --</span></div>
+          <canvas id="netSpark" width="360" height="76"></canvas>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <section class="panel span-2">
+          <div class="panel-head">
+            <h2>Security Watch</h2>
+            <span id="securityCount">-- signals</span>
+          </div>
+          <div id="security" class="security-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Security Coverage</h2>
+            <span id="coverageCount">-- layers</span>
+          </div>
+          <div id="coverage" class="coverage-list"></div>
+        </section>
+
+        <section class="panel operator-panel">
+          <div class="panel-head">
+            <h2>Operator Console</h2>
+            <span id="actionStatus">idle</span>
+          </div>
+          <div class="action-list">
+            <div id="quickLinks" class="quick-links" aria-label="Quick links"></div>
+            <div class="action-row">
+              <input id="ipInput" autocomplete="off" spellcheck="false" placeholder="remote IP">
+              <button id="blockIpBtn" type="button">Block</button>
+              <button id="unblockIpBtn" type="button">Unblock</button>
+            </div>
+            <div class="action-row">
+              <select id="serviceSelect"></select>
+              <button id="startServiceBtn" type="button">Start</button>
+              <button id="restartServiceBtn" type="button">Restart</button>
+            </div>
+            <div class="tool-grid" aria-label="Diagnostics">
+              <button id="healthBtn" type="button">App Health</button>
+              <button id="caddyValidateBtn" type="button">Caddy Validate</button>
+              <button id="tabletReadinessBtn" type="button">Tablet Check</button>
+              <button id="scanBtn" type="button">Security Scan</button>
+              <button id="logonBlockerBtn" type="button">Run Blocker</button>
+              <button id="refreshHudBtn" type="button">Refresh HUD</button>
+            </div>
+            <div class="blocked-box">
+              <div class="mini-head"><strong>Blocked IPs</strong><span id="blockedIpCount">--</span></div>
+              <div id="blockedIpList" class="blocked-list"></div>
+            </div>
+            <pre id="actionOutput" class="action-output">Operator results will appear here.</pre>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Reboot Readiness</h2>
+            <span id="readinessCount">-- ready</span>
+          </div>
+          <div id="readiness" class="readiness-list"></div>
+        </section>
+
+        <section class="panel process-panel">
+          <div class="panel-head">
+            <h2>Process Labels</h2>
+            <span id="processCount">-- tracked</span>
+          </div>
+          <div id="processes" class="process-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Volumes</h2>
+            <span>free space</span>
+          </div>
+          <div id="volumes" class="volume-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Listening Ports</h2>
+            <span id="portCount">-- open</span>
+          </div>
+          <div id="ports" class="port-grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Active Connections</h2>
+            <span id="connectionCount">-- live</span>
+          </div>
+          <div id="connections" class="connection-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Service Footprint</h2>
+            <span id="serviceCount">-- running</span>
+          </div>
+          <div id="services" class="service-list"></div>
+        </section>
+
+        <section class="panel span-2">
+          <div class="panel-head">
+            <h2>Detected Workloads</h2>
+            <span id="workloadCount">-- apps</span>
+          </div>
+          <div id="workloads" class="workload-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Drift Sentinel</h2>
+            <span id="driftCount">-- checks</span>
+          </div>
+          <div id="drift" class="drift-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Startup Surface</h2>
+            <span id="startupCount">-- entries</span>
+          </div>
+          <div id="startup" class="startup-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Log Intelligence</h2>
+            <span id="logIntelCount">-- logs</span>
+          </div>
+          <div id="logIntel" class="log-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Alert Trail</h2>
+            <span id="alertCount">-- alerts</span>
+          </div>
+          <div id="alertLog" class="alert-list"></div>
+        </section>
+
+        <section class="panel span-2">
+          <div class="panel-head">
+            <h2>Recent Faults</h2>
+            <span>last 6 hours</span>
+          </div>
+          <div id="events" class="event-list"></div>
+        </section>
+
+        <section class="panel span-2">
+          <div class="panel-head">
+            <h2>Optimization Radar</h2>
+            <span>no quality tradeoffs</span>
+          </div>
+          <div id="recommendations" class="radar"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
