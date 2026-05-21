@@ -22,6 +22,7 @@ const activeProfilePath = path.join(dataDir, "active-profile.json");
 const port = Number(process.env.PORT || 3927);
 const sampleMs = Number(process.env.SAMPLE_MS || 5000);
 const slowSecurityMs = Number(process.env.SLOW_SECURITY_MS || 10 * 60 * 1000);
+const windowsSnapshotTimeoutMs = Number(process.env.WINDOWS_SNAPSHOT_TIMEOUT_MS || 120000);
 const powerShellExe = process.env.MASTERHUD_POWERSHELL || "powershell.exe";
 
 const defaultConfig = {
@@ -53,6 +54,7 @@ const defaultConfig = {
   },
   readinessCommands: [],
   tabletReadinessCommand: "",
+  allowRemoteChecks: false,
   quickLinks: []
 };
 
@@ -124,6 +126,10 @@ async function reloadConfig() {
   return config;
 }
 
+function remoteChecksAllowed() {
+  return config.allowRemoteChecks === true || process.env.MASTERHUD_ALLOW_REMOTE_CHECKS === "1";
+}
+
 let previousCpu = os.cpus();
 let previousNet = null;
 let previousDisk = null;
@@ -160,6 +166,10 @@ function runPowerShell(script, timeout = 30000) {
       { timeout, windowsHide: true, maxBuffer: 1024 * 1024 * 8 },
       (error, stdout, stderr) => {
         if (error) {
+          if (error.killed || error.signal === "SIGTERM") {
+            resolve({ ok: false, error: `PowerShell command timed out after ${timeout}ms` });
+            return;
+          }
           resolve({ ok: false, error: String(stderr || error.message).trim() });
           return;
         }
@@ -525,6 +535,9 @@ function tlsExpiry(hostname) {
 }
 
 async function monitorUptimeAndTls() {
+  if (!remoteChecksAllowed()) {
+    return { status: "disabled", reason: "Remote uptime and TLS checks are disabled by default.", vantage: "local-server", uptime: [], tls: [] };
+  }
   const urls = normalizeArray(config.publicUrls).filter(Boolean);
   if (!urls.length) return { status: "limited", vantage: "local-server", uptime: [], tls: [] };
   const uptime = await Promise.all(urls.map(httpsCheck));
@@ -586,6 +599,9 @@ async function monitorBackups(windows) {
 }
 
 async function monitorDependencyAudit(windows) {
+  if (!remoteChecksAllowed()) {
+    return { status: "disabled", reason: "npm audit can contact the npm registry and is disabled by default.", audits: [] };
+  }
   const audits = [];
   for (const workload of appWorkloads(windows)) {
     if (!workload.AppDirectory || !(await pathExists(path.join(workload.AppDirectory, "package.json")))) continue;
@@ -685,6 +701,7 @@ async function monitorNpmSupplyChain(windows) {
 }
 
 function updateChecksEnabled(name) {
+  if (["windows", "winget", "npm"].includes(name) && !remoteChecksAllowed()) return false;
   const checks = config.updateChecks || {};
   return checks[name] !== false;
 }
@@ -1412,9 +1429,15 @@ $scheduledTasks = @(
 $startupCommands = Get-CimInstance Win32_StartupCommand |
   Select-Object -First 80 Name, Command, Location, User
 
-$firewallExposure = foreach ($r in (Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow)) {
-  $rulePorts = $r | Get-NetFirewallPortFilter
-  $ruleAddr = $r | Get-NetFirewallAddressFilter
+$firewallRules = @(Get-NetFirewallRule -Enabled True -Direction Inbound -Action Allow)
+$firewallPortsById = @{}
+Get-NetFirewallPortFilter | ForEach-Object { $firewallPortsById[$_.InstanceID] = $_ }
+$firewallAddressById = @{}
+Get-NetFirewallAddressFilter | ForEach-Object { $firewallAddressById[$_.InstanceID] = $_ }
+$firewallExposure = foreach ($r in $firewallRules) {
+  $rulePorts = $firewallPortsById[$r.InstanceID]
+  $ruleAddr = $firewallAddressById[$r.InstanceID]
+  if (-not $rulePorts -or -not $ruleAddr) { continue }
   $managementRule = $r.DisplayName -match "Remote Desktop|RDP|OpenSSH|WinRM|File and Printer|SMB"
   $riskyPort = $rulePorts.LocalPort -in @("22","135","139","445","3389","5985","5986") -or ($rulePorts.LocalPort -eq "Any" -and $managementRule)
   $broadRemote = $ruleAddr.RemoteAddress -in @("Any","Internet")
@@ -1615,7 +1638,7 @@ $events = Get-WinEvent -FilterHashtable @{LogName=@("System","Application"); Lev
   events = $events
 } | ConvertTo-Json -Depth 8 -Compress -WarningAction SilentlyContinue
 `;
-  const result = await runPowerShell(script);
+  const result = await runPowerShell(script, windowsSnapshotTimeoutMs);
   if (!result.ok) return { error: result.error };
   return {
     ...result.data,
@@ -1780,8 +1803,16 @@ async function collect() {
   collecting = true;
   try {
     const windows = await windowsSnapshot();
-    const slow = await runSlowSecurityMonitors(windows);
-    mergeSlowSecurity(windows, slow);
+    mergeSlowSecurity(windows, slowSecurity);
+    runSlowSecurityMonitors(windows).catch((error) => {
+      slowSecurity = {
+        ...slowSecurity,
+        capturedAt: new Date().toISOString(),
+        running: false,
+        findings: [slowFinding("warm", "Slow security monitors failed", error.message)],
+        coverage: [coverageItem("Slow security monitors", "limited", error.message)]
+      };
+    });
     await mergeAutoBlockState(windows);
     windows.rebootReadiness = computeRebootReadiness(windows);
     const data = {
@@ -2024,7 +2055,14 @@ async function handleAction(req, res, pathname) {
     }
 
     if (pathname === "/api/actions/update-brief") {
-      const windows = latest?.windows || await windowsSnapshot();
+      if (!latest?.windows) {
+        sendJson(res, 202, {
+          ok: true,
+          message: "Snapshot is still warming up. Try Update Brief again after the first HUD refresh."
+        });
+        return true;
+      }
+      const windows = latest.windows;
       const watch = await monitorUpdateWatch(windows);
       if (latest?.windows?.security) {
         latest.windows.security.updateWatch = watch;

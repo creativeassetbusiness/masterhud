@@ -57,13 +57,14 @@
     }
   ],
   "updateChecks": {
-    "windows": true,
-    "winget": true,
-    "npm": true,
+    "windows": false,
+    "winget": false,
+    "npm": false,
     "git": true,
     "versions": true
   },
   "tabletReadinessCommand": "",
+  "allowRemoteChecks": false,
   "quickLinks": [
     {
       "label": "Open App",

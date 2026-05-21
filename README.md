@@ -4,6 +4,8 @@ MasterHUD is a local Windows server dashboard for managing small website VPS fle
 
 It is designed to stay bound to `127.0.0.1` and be opened through the server console, RDP, or a trusted tunnel. Do not expose it directly to the public internet unless you add authentication and TLS.
 
+By default, MasterHUD does not run outbound internet checks. Remote uptime/TLS checks and `npm audit` are disabled unless `allowRemoteChecks` is set to `true` in the local config/profile or `MASTERHUD_ALLOW_REMOTE_CHECKS=1` is set for the process.
+
 ## Run
 
 ```powershell
@@ -55,19 +57,20 @@ Profile files are ignored by Git except `*.example.json`, so every VPS can keep 
 
 Useful config fields:
 
-- `publicUrls`: public sites to check for uptime and TLS expiry.
+- `publicUrls`: public sites to check for uptime and TLS expiry only when `allowRemoteChecks` is enabled.
 - `expectedWorkloads`: app folders to include in drift, backup, and dependency checks.
 - `managedServices`: allow-listed Windows services shown in the Operator Console.
 - `requiredServices` and `requiredPorts`: reboot-readiness expectations.
 - `appRoot`, `healthUrl`, `caddyConfigPath`: app-specific diagnostic actions.
 - `wingetPath`: optional full path to `winget.exe` when the HUD runs as SYSTEM.
 - `versionCommands`: read-only commands for showing runtime versions such as Node, npm, Git, Caddy, or PostgreSQL.
-- `updateChecks`: toggles for Windows Update, winget, npm outdated, Git drift, and version probes.
+- `updateChecks`: toggles for Windows Update, winget, npm outdated, Git drift, and version probes; Windows/winget/npm checks also require `allowRemoteChecks`.
+- `allowRemoteChecks`: opt-in switch for outbound uptime/TLS checks and `npm audit`; default is `false`.
 - `quickLinks`: buttons shown in the Operator Console.
 
 ## Update Detection
 
-MasterHUD detects updates but does not install them automatically.
+MasterHUD detects updates but does not install them automatically. Checks that can contact outside services are off unless `allowRemoteChecks` is enabled.
 
 - Windows Update: uses the local Microsoft Update COM API and reports pending visible updates.
 - winget: runs `winget upgrade` and parses available package upgrades.
