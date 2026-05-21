@@ -52,6 +52,8 @@ const defaultConfig = {
     git: true,
     versions: true
   },
+  appServiceName: "",
+  appSecurity: {},
   readinessCommands: [],
   tabletReadinessCommand: "",
   allowRemoteChecks: false,
@@ -148,6 +150,7 @@ let slowSecurity = {
   uptime: null,
   sysmon: null,
   backups: null,
+  appGuard: null,
   dependencyAudit: null
 };
 
@@ -596,6 +599,174 @@ async function monitorBackups(windows) {
     }
   }
   return { status: results.some((result) => result.newest) ? "active" : "limited", roots: results };
+}
+
+async function collectFiles(root, maxDepth = 2) {
+  const files = [];
+  async function visit(dir, depth) {
+    if (depth < 0) return;
+    let entries = [];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile()) files.push(entryPath);
+      else if (entry.isDirectory()) await visit(entryPath, depth - 1);
+    }
+  }
+  await visit(root, maxDepth);
+  return files;
+}
+
+function appSecurityConfig() {
+  const appRoot = currentAppRoot();
+  const raw = config.appSecurity && typeof config.appSecurity === "object" ? config.appSecurity : {};
+  const securityEventsPath = raw.securityEventsPath || path.join(appRoot, "backend", "security-events.log");
+  const backupRoots = normalizeArray(raw.backupRoots && raw.backupRoots.length ? raw.backupRoots : [
+    path.join(appRoot, "backups", "encrypted"),
+    path.join(appRoot, "backups", "dr"),
+    path.join(appRoot, "backups", "security-events")
+  ]).filter(Boolean);
+  return {
+    enabled: raw.enabled !== false,
+    securityEventsPath,
+    backupRoots,
+    eventLimit: Math.min(1000, Math.max(50, Number(raw.eventLimit || 300))),
+    windowHours: Math.min(168, Math.max(1, Number(raw.windowHours || 24)))
+  };
+}
+
+function summarizeEventTypes(events, sinceMs) {
+  const summary = {
+    total: 0,
+    failedLogins: 0,
+    successfulLogins: 0,
+    loginBlocks: 0,
+    recordWarnings: 0,
+    recordBlocks: 0,
+    countryBlocks: 0,
+    dataBlocks: 0,
+    localAdminBlocks: 0
+  };
+  for (const event of events) {
+    const at = Date.parse(event.at || event.time || event.capturedAt || "");
+    if (Number.isFinite(at) && at < sinceMs) continue;
+    summary.total += 1;
+    const type = String(event.type || "");
+    if (type === "login_failed") summary.failedLogins += 1;
+    if (type === "login_success") summary.successfulLogins += 1;
+    if ((type.includes("login_") && type.includes("blocked")) || type === "login_rate_limit_started") summary.loginBlocks += 1;
+    if (type === "traffic_record_pull_warning") summary.recordWarnings += 1;
+    if (type === "traffic_record_pull_limited") summary.recordBlocks += 1;
+    if (type === "traffic_country_pull_blocked") summary.countryBlocks += 1;
+    if (type.includes("traffic_data")) summary.dataBlocks += 1;
+    if (type.includes("localadmin") && type.includes("blocked")) summary.localAdminBlocks += 1;
+  }
+  return summary;
+}
+
+function topEventCounts(events, field, limit = 6) {
+  const counts = new Map();
+  for (const event of events) {
+    const key = String(event[field] || "").trim();
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }));
+}
+
+function countryCountsFromEvents(events, limit = 6) {
+  const counts = new Map();
+  for (const event of events) {
+    const detail = String(event.detail || "");
+    const match = detail.match(/\bcountry=([A-Z]{2}|LOCAL)\b/i);
+    if (!match) continue;
+    const country = match[1].toUpperCase();
+    counts.set(country, (counts.get(country) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([country, count]) => ({ country, count }));
+}
+
+async function summarizeBackupRoot(root) {
+  const exists = await pathExists(root);
+  if (!exists) return { root, exists: false, files: 0, newest: null, totalBytes: 0 };
+  const files = await collectFiles(root, 2);
+  let newest = null;
+  let totalBytes = 0;
+  for (const file of files) {
+    try {
+      const stat = await fs.stat(file);
+      totalBytes += Number(stat.size || 0);
+      if (!newest || stat.mtime > newest.mtime) newest = { path: file, mtime: stat.mtime, size: stat.size };
+    } catch {}
+  }
+  return {
+    root,
+    exists: true,
+    files: files.length,
+    totalBytes,
+    newest: newest ? {
+      path: newest.path,
+      lastWriteTime: newest.mtime.toISOString(),
+      ageHours: Math.round((Date.now() - newest.mtime) / 3600000),
+      size: newest.size
+    } : null
+  };
+}
+
+async function monitorAppGuard(windows) {
+  const appRoot = currentAppRoot();
+  const guard = appSecurityConfig();
+  if (!guard.enabled || !appRoot) {
+    return { status: "limited", enabled: false, events: [], summary: {}, backups: [] };
+  }
+  const events = await readJsonlTail(guard.securityEventsPath, guard.eventLimit);
+  const sinceMs = Date.now() - guard.windowHours * 3600000;
+  const recent = events.filter((event) => {
+    const at = Date.parse(event.at || event.time || event.capturedAt || "");
+    return !Number.isFinite(at) || at >= sinceMs;
+  });
+  const importantTypes = /blocked|limited|warning|failed|rate_limit|localadmin/i;
+  const importantEvents = recent.filter((event) => importantTypes.test(String(event.type || ""))).slice(0, 16);
+  const backups = [];
+  for (const root of guard.backupRoots) {
+    backups.push(await summarizeBackupRoot(root));
+  }
+  const services = normalizeArray(windows.services);
+  const required = normalizeArray(config.requiredServices).filter(Boolean);
+  const serviceStatus = required.map((name) => {
+    const service = services.find((entry) => String(entry.Name || "").toLowerCase() === String(name).toLowerCase());
+    return {
+      name,
+      status: service?.State || "missing",
+      startMode: service?.StartMode || "unknown",
+      processId: service?.ProcessId || ""
+    };
+  });
+  return {
+    status: events.length || backups.length ? "active" : "limited",
+    enabled: true,
+    appRoot,
+    appServiceName: currentAppServiceName(),
+    securityEventsPath: guard.securityEventsPath,
+    windowHours: guard.windowHours,
+    summary: summarizeEventTypes(events, sinceMs),
+    topIps: topEventCounts(recent, "ip"),
+    topUsers: topEventCounts(recent, "username"),
+    countries: countryCountsFromEvents(recent),
+    recentEvents: importantEvents,
+    backups,
+    services: serviceStatus
+  };
 }
 
 async function monitorDependencyAudit(windows) {
@@ -1102,6 +1273,14 @@ function summarizeSlowSecurity(monitors) {
     else if (root.newest.ageHours > 72) findings.push(slowFinding("warm", "Backup stale", `${root.root} newest backup is ${root.newest.ageHours} hours old.`));
   }
 
+  const appGuard = monitors.appGuard;
+  const appSummary = appGuard?.summary || {};
+  coverage.push(coverageItem("App security guard", appGuard?.status || "limited", `${appSummary.total || 0} app security event(s) reviewed over ${appGuard?.windowHours || 24} hour(s).`));
+  if ((appSummary.countryBlocks || 0) > 0) findings.push(slowFinding("hot", "Non-US data pull blocked", `${appSummary.countryBlocks} country-based data pull block(s) were logged by the app guard.`));
+  if ((appSummary.recordBlocks || 0) > 0) findings.push(slowFinding("hot", "Record-pull scraper block", `${appSummary.recordBlocks} excessive record-pull block(s) were logged by the app guard.`));
+  if ((appSummary.recordWarnings || 0) > 0) findings.push(slowFinding("warm", "Record-pull warning", `${appSummary.recordWarnings} record-pull warning(s) were logged by the app guard.`));
+  if ((appSummary.loginBlocks || 0) > 0) findings.push(slowFinding("warm", "App login rate-limit block", `${appSummary.loginBlocks} app login rate-limit block(s) were logged.`));
+
   const audits = monitors.dependencyAudit;
   coverage.push(coverageItem("Dependency audit monitoring", audits?.status || "limited", `${audits?.audits?.length || 0} production dependency audit(s) checked.`));
   for (const audit of audits?.audits || []) {
@@ -1151,6 +1330,7 @@ async function runSlowSecurityMonitors(windows, force = false) {
       uptime: await safeSlowMonitor("uptime and TLS", monitorUptimeAndTls, { uptime: [], tls: [] }),
       sysmon: await safeSlowMonitor("sysmon", monitorSysmonOrEdr, { services: [], sysmonEvents: [] }),
       backups: await safeSlowMonitor("backups", () => monitorBackups(windows), { roots: [] }),
+      appGuard: await safeSlowMonitor("app guard", () => monitorAppGuard(windows), { events: [], summary: {}, backups: [] }),
       dependencyAudit: await safeSlowMonitor("dependency audit", () => monitorDependencyAudit(windows), { audits: [] }),
       npmSupplyChain: await safeSlowMonitor("npm supply chain", () => monitorNpmSupplyChain(windows), { checks: [] }),
       updateWatch: await safeSlowMonitor("update watch", () => monitorUpdateWatch(windows), {})
@@ -1730,6 +1910,7 @@ function mergeSlowSecurity(windows, slow) {
   windows.security.uptime = slow.uptime;
   windows.security.sysmon = slow.sysmon;
   windows.security.backups = slow.backups;
+  windows.security.appGuard = slow.appGuard;
   windows.security.dependencyAudit = slow.dependencyAudit;
   windows.security.npmSupplyChain = slow.npmSupplyChain;
   windows.security.updateWatch = slow.updateWatch;
@@ -1870,6 +2051,17 @@ function currentAppRoot() {
   return config.appRoot || __dirname;
 }
 
+function currentAppServiceName() {
+  if (typeof config.appServiceName === "string" && config.appServiceName.trim()) return config.appServiceName.trim();
+  const workload = normalizeArray(config.expectedWorkloads).find((entry) => entry?.Name);
+  if (workload?.Name) return String(workload.Name);
+  const service = normalizeArray(config.managedServices).find((entry) => {
+    const name = configuredServiceName(entry);
+    return name && !/caddy|postgres|postgresql/i.test(name);
+  });
+  return configuredServiceName(service) || "";
+}
+
 function currentManageableServices() {
   return new Set(normalizeArray(config.managedServices).map(configuredServiceName).filter(Boolean));
 }
@@ -1957,6 +2149,17 @@ async function handleAction(req, res, pathname) {
     if (pathname === "/api/actions/start-service" || pathname === "/api/actions/restart-service") {
       const action = pathname.endsWith("start-service") ? "start" : "restart";
       const result = await runServiceAction(body.name, action);
+      sendJson(res, result.ok ? 200 : 500, { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error });
+      return true;
+    }
+
+    if (pathname === "/api/actions/restart-app-service") {
+      const appServiceName = currentAppServiceName();
+      if (!appServiceName) {
+        sendJson(res, 400, { ok: false, error: "appServiceName is not configured and no expected workload service was found" });
+        return true;
+      }
+      const result = await runServiceAction(appServiceName, "restart");
       sendJson(res, result.ok ? 200 : 500, { ok: result.ok, stdout: result.stdout, stderr: result.stderr || result.error });
       return true;
     }
@@ -2111,7 +2314,8 @@ const server = http.createServer(async (req, res) => {
       profile: config.profile,
       profiles: await listProfiles(),
       quickLinks: normalizeArray(config.quickLinks),
-      managedServices: normalizeArray(config.managedServices)
+      managedServices: normalizeArray(config.managedServices),
+      appServiceName: currentAppServiceName()
     });
     return;
   }

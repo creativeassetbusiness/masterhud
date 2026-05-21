@@ -235,6 +235,7 @@ canvas {
 .update-list,
 .log-list,
 .alert-list,
+.app-guard-list,
 .action-list,
 .event-list,
 .radar {
@@ -254,6 +255,8 @@ canvas {
 .readiness-row,
 .log-row,
 .alert-row,
+.app-event-row,
+.app-backup-row,
 .event-row,
 .tip-row,
 .port {
@@ -547,7 +550,8 @@ canvas {
 
 .readiness-list,
 .log-list,
-.alert-list {
+.alert-list,
+.app-guard-list {
   max-height: 268px;
   overflow: auto;
 }
@@ -564,15 +568,36 @@ canvas {
   border-left: 4px solid var(--green);
 }
 
+.app-event-row,
+.app-backup-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.85fr) minmax(180px, 1.15fr);
+  gap: 6px;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 7px;
+  font-size: 12px;
+  border-left: 4px solid var(--green);
+}
+
 .readiness-row.warn,
-.alert-row.warm {
+.alert-row.warm,
+.app-event-row.warm,
+.app-backup-row.warm {
   border-left-color: var(--yellow);
 }
 
 .readiness-row.bad,
 .alert-row.hot,
-.alert-row.bad {
+.alert-row.bad,
+.app-event-row.hot,
+.app-backup-row.hot {
   border-left-color: var(--red);
+}
+
+.app-event-row.cool,
+.app-backup-row.cool {
+  border-left-color: var(--green);
 }
 
 .log-row {
@@ -595,7 +620,11 @@ canvas {
 .log-row strong,
 .log-row span,
 .alert-row strong,
-.alert-row span {
+.alert-row span,
+.app-event-row strong,
+.app-event-row span,
+.app-backup-row strong,
+.app-backup-row span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -604,8 +633,67 @@ canvas {
 
 .readiness-row span,
 .log-row span,
-.alert-row span {
+.alert-row span,
+.app-event-row span,
+.app-backup-row span {
   color: var(--muted);
+}
+
+.app-guard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 172px;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.app-guard-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(78px, 1fr));
+  gap: 6px;
+}
+
+.app-guard-card {
+  min-height: 48px;
+  padding: 7px;
+  border: 1px solid #252d36;
+  border-left: 4px solid var(--green);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.app-guard-card.warm { border-left-color: var(--yellow); }
+.app-guard-card.hot { border-left-color: var(--red); }
+
+.app-guard-card span,
+.app-guard-card strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-guard-card span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-guard-card strong {
+  margin-top: 4px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-guard-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.app-guard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 8px;
 }
 
 .action-list {
@@ -827,6 +915,7 @@ button:hover {
   .kpi-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
   .main-grid { grid-template-columns: 1fr 1fr; }
   .span-2 { grid-column: span 2; }
+  .app-guard-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 720px) {
@@ -858,9 +947,15 @@ button:hover {
   .readiness-row,
   .log-row,
   .alert-row,
+  .app-event-row,
+  .app-backup-row,
+  .app-guard-grid,
+  .app-guard-body,
   .action-row,
   .profile-row,
   .quick-links,
   .tool-grid,
+  .app-guard-actions,
   .blocked-row { grid-template-columns: 1fr; }
+  .app-guard-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

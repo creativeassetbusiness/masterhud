@@ -38,6 +38,18 @@ function percent(value) {
   return `${fmt.format(Math.max(0, Math.min(100, Number(value || 0))))}%`;
 }
 
+function timeAgo(value) {
+  const time = value ? new Date(value).getTime() : NaN;
+  if (!Number.isFinite(time)) return "--";
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+  if (seconds < 90) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 function pushHistory(key, value) {
   history[key].push(Number(value || 0));
   if (history[key].length > maxHistory) history[key].shift();
@@ -409,6 +421,67 @@ function renderBlockedIps(security = {}) {
   }).join("") || `<div class="tip-row"><strong>No active blocks</strong><p>Repeated failed logons will appear here after the blocker runs.</p></div>`;
 }
 
+function appGuardLevelForEvent(event = {}) {
+  const type = String(event.type || "");
+  if (/country_pull_blocked|record_pull_limited|data_limited|localadmin.*blocked/i.test(type)) return "hot";
+  if (/warning|rate_limit|blocked|failed/i.test(type)) return "warm";
+  return "cool";
+}
+
+function renderAppGuard(security = {}) {
+  const guard = security.appGuard || {};
+  const summary = guard.summary || {};
+  const events = Array.isArray(guard.recentEvents) ? guard.recentEvents : [];
+  const backups = Array.isArray(guard.backups) ? guard.backups : [];
+  const services = Array.isArray(guard.services) ? guard.services : [];
+  const recordSignals = Number(summary.recordWarnings || 0) + Number(summary.recordBlocks || 0);
+  const blockSignals = Number(summary.countryBlocks || 0) + Number(summary.recordBlocks || 0) + Number(summary.dataBlocks || 0) + Number(summary.loginBlocks || 0);
+  $("appGuardCount").textContent = `${blockSignals} blocks · ${recordSignals} pulls`;
+  $("appGuardEventCount").textContent = `${events.length} shown`;
+  $("appGuardBackupCount").textContent = `${backups.length} roots · ${services.length} services`;
+
+  const cards = [
+    { label: "Failed logins", value: summary.failedLogins || 0, level: summary.failedLogins ? "warm" : "cool" },
+    { label: "Login blocks", value: summary.loginBlocks || 0, level: summary.loginBlocks ? "warm" : "cool" },
+    { label: "Record pulls", value: `${summary.recordWarnings || 0}/${summary.recordBlocks || 0}`, level: summary.recordBlocks ? "hot" : summary.recordWarnings ? "warm" : "cool" },
+    { label: "Country blocks", value: summary.countryBlocks || 0, level: summary.countryBlocks ? "hot" : "cool" },
+    { label: "Data blocks", value: summary.dataBlocks || 0, level: summary.dataBlocks ? "hot" : "cool" },
+    { label: "Window", value: `${guard.windowHours || 24}h`, level: "cool" }
+  ];
+  $("appGuardSummary").innerHTML = cards.map((card) => `<div class="app-guard-card ${esc(card.level)}">
+    <span>${esc(card.label)}</span>
+    <strong>${esc(card.value)}</strong>
+  </div>`).join("");
+
+  $("appGuardEvents").innerHTML = events.map((event) => {
+    const level = appGuardLevelForEvent(event);
+    const detail = [event.ip, event.username, event.detail].filter(Boolean).join(" · ");
+    return `<div class="app-event-row ${esc(level)}">
+      <strong title="${esc(event.type)}">${esc(event.type || "event")}</strong>
+      <span title="${esc(detail)}">${esc(timeAgo(event.at))} · ${esc(detail || event.path || "")}</span>
+    </div>`;
+  }).join("") || `<div class="tip-row"><strong>No app guard events</strong><p>No failed login, blocked pull, or warning event is in the selected window.</p></div>`;
+
+  const serviceRows = services.map((service) => {
+    const running = String(service.status || "").toLowerCase() === "running";
+    return `<div class="app-backup-row ${running ? "cool" : "hot"}">
+      <strong title="${esc(service.name)}">${esc(service.name)}</strong>
+      <span>${esc(service.status || "missing")} · ${esc(service.startMode || "unknown")}</span>
+    </div>`;
+  });
+  const backupRows = backups.map((backup) => {
+    const age = Number(backup.newest?.ageHours ?? 999999);
+    const level = !backup.exists || !backup.newest ? "hot" : age > 72 ? "warm" : "cool";
+    const newest = backup.newest ? `${timeAgo(backup.newest.lastWriteTime)} · ${bytes(backup.newest.size)}` : "no files";
+    return `<div class="app-backup-row ${esc(level)}">
+      <strong title="${esc(backup.root)}">${esc(backup.root ? backup.root.split(/[\\/]/).slice(-2).join("\\") : "backup")}</strong>
+      <span title="${esc(backup.root)}">${esc(backup.files || 0)} files · ${esc(newest)}</span>
+    </div>`;
+  });
+  $("appGuardBackups").innerHTML = [...serviceRows, ...backupRows].join("")
+    || `<div class="tip-row"><strong>No app guard backup data</strong><p>Configure appRoot or appSecurity.backupRoots in the active profile.</p></div>`;
+}
+
 function formatActionOutput(data) {
   const parts = [];
   if (data.message) parts.push(data.message);
@@ -498,6 +571,17 @@ function setupActions() {
   $("updateBriefBtn")?.addEventListener("click", () => postAction("/api/actions/update-brief", {}, "Update brief"));
   $("logonBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
   $("refreshHudBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
+  $("appGuardHealthBtn")?.addEventListener("click", () => postAction("/api/actions/app-health", {}, "App health"));
+  $("appGuardScanBtn")?.addEventListener("click", () => postAction("/api/actions/run-security-scan", {}, "Security scan"));
+  $("appGuardTabletBtn")?.addEventListener("click", () => postAction("/api/actions/tablet-readiness", {}, "Tablet readiness"));
+  $("appGuardRestartBtn")?.addEventListener("click", () => {
+    const name = operatorConfig.appServiceName || "app service";
+    if (window.confirm(`Restart ${name} now? This can briefly interrupt users.`)) {
+      postAction("/api/actions/restart-app-service", {}, `Restart ${name}`);
+    }
+  });
+  $("appGuardBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
+  $("appGuardRefreshBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
   $("applyProfileBtn")?.addEventListener("click", async () => {
     await postAction("/api/actions/set-profile", { profile: $("profileSelect").value }, "Switch profile");
     await loadOperatorConfig();
@@ -515,6 +599,7 @@ function render(data) {
   $("clock").textContent = new Date(data.capturedAt).toLocaleTimeString();
   $("hostLine").textContent = `${data.host.hostname} · Windows ${data.host.release} · uptime ${fmt.format(data.host.uptime / 3600)}h · sample ${data.sampleMs}ms`;
   renderKpis(data);
+  renderAppGuard(data.windows?.security);
   renderSecurity(data.windows?.security);
   renderBlockedIps(data.windows?.security);
   renderCoverage(data.windows?.security);

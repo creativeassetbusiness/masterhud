@@ -64,6 +64,17 @@
     "git": true,
     "versions": true
   },
+  "appServiceName": "ExampleWebsite",
+  "appSecurity": {
+    "securityEventsPath": "C:\\apps\\example-website\\backend\\security-events.log",
+    "backupRoots": [
+      "C:\\apps\\example-website\\backups\\encrypted",
+      "C:\\apps\\example-website\\backups\\dr",
+      "C:\\apps\\example-website\\backups\\security-events"
+    ],
+    "windowHours": 24,
+    "eventLimit": 300
+  },
   "readinessCommands": [
     {
       "id": "health",

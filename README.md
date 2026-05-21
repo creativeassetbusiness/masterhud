@@ -62,6 +62,8 @@ Useful config fields:
 - `managedServices`: allow-listed Windows services shown in the Operator Console.
 - `requiredServices` and `requiredPorts`: reboot-readiness expectations.
 - `appRoot`, `healthUrl`, `caddyConfigPath`: app-specific diagnostic actions.
+- `appServiceName`: primary app service used by the App Guard restart button.
+- `appSecurity`: app security-log and backup-root settings for the App Guard panel.
 - `wingetPath`: optional full path to `winget.exe` when the HUD runs as SYSTEM.
 - `versionCommands`: read-only commands for showing runtime versions such as Node, npm, Git, Caddy, or PostgreSQL.
 - `updateChecks`: toggles for Windows Update, winget, npm outdated, Git drift, and version probes; Windows/winget/npm checks also require `allowRemoteChecks`.
@@ -98,6 +100,7 @@ Use the `Update Brief` button for a read-only preflight report. It lists current
 - Optimization radar focused on no-quality-loss wins
 - Alert trail with local dedupe and optional webhook delivery through `data/alerts-config.json`
 - Reboot readiness for the app services, MasterHUD boot tasks, and expected listeners
+- App Guard panel for the active profile: app security events, failed logins, record-pull blocks, country blocks, backup freshness, required service state, and focused app action buttons
 - Local operator console with quick app links, IP block/unblock, blocked-IP review, allow-listed service start/restart, app health, Caddy config validation, optional client-defined readiness verification, failed-logon blocker run, HUD refresh, and forced security scan
 - Security history in `data/history.jsonl` for trend review
 
