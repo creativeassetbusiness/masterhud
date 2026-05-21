@@ -172,6 +172,7 @@ canvas {
 .security-list,
 .coverage-list,
 .readiness-list,
+.update-list,
 .log-list,
 .alert-list,
 .action-list,
@@ -423,6 +424,37 @@ canvas {
   border-left: 4px solid var(--green);
 }
 
+.update-row {
+  display: grid;
+  grid-template-columns: 78px minmax(130px, 0.8fr) minmax(180px, 1.2fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 8px;
+  font-size: 12px;
+  border-left: 4px solid var(--green);
+}
+
+.update-row.warm {
+  border-left-color: var(--yellow);
+}
+
+.update-row.hot {
+  border-left-color: var(--red);
+}
+
+.update-row strong,
+.update-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-row span {
+  color: var(--muted);
+}
+
 .coverage-row.missing {
   border-left-color: var(--red);
 }
@@ -444,6 +476,11 @@ canvas {
 }
 
 .coverage-list {
+  max-height: 316px;
+  overflow: auto;
+}
+
+.update-list {
   max-height: 316px;
   overflow: auto;
 }
@@ -746,6 +783,7 @@ button:hover {
   .startup-row,
   .security-row,
   .coverage-row,
+  .update-row,
   .readiness-row,
   .log-row,
   .alert-row,

@@ -37,6 +37,20 @@ const defaultConfig = {
     "C:\\Program Files\\Caddy\\caddy.exe",
     "C:\\caddy\\caddy.exe"
   ],
+  wingetPath: "winget.exe",
+  versionCommands: [
+    { name: "Node.js", command: "node --version" },
+    { name: "npm", command: "npm --version" },
+    { name: "Git", command: "git --version" },
+    { name: "Caddy", command: "caddy version" }
+  ],
+  updateChecks: {
+    windows: true,
+    winget: true,
+    npm: true,
+    git: true,
+    versions: true
+  },
   readinessCommands: [],
   tabletReadinessCommand: "",
   quickLinks: []
@@ -670,6 +684,187 @@ async function monitorNpmSupplyChain(windows) {
   return { status: checks.length ? "active" : "limited", checks };
 }
 
+function updateChecksEnabled(name) {
+  const checks = config.updateChecks || {};
+  return checks[name] !== false;
+}
+
+function configuredWorkloads(windows) {
+  const workloads = new Map();
+  for (const workload of appWorkloads(windows)) {
+    if (workload.AppDirectory) workloads.set(String(workload.AppDirectory).toLowerCase(), workload);
+  }
+  for (const fallback of [
+    ...normalizeArray(config.expectedWorkloads),
+    { DisplayName: "MasterHUD", Name: "MasterHUD", AppDirectory: __dirname }
+  ]) {
+    if (fallback?.AppDirectory) workloads.set(String(fallback.AppDirectory).toLowerCase(), fallback);
+  }
+  return [...workloads.values()];
+}
+
+function parseWingetUpgrades(output) {
+  const lines = String(output || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trim());
+  const upgrades = [];
+  for (const line of lines) {
+    if (!line.trim() || /\d+\s+upgrades?\s+available/i.test(line) || /^-+$/.test(line.trim())) continue;
+    if (/^Name\s+Id\s+Version\s+Available\s+Source/i.test(line)) continue;
+    if (!/\swinget$/i.test(line)) continue;
+    const tokens = line.split(/\s+/).filter(Boolean);
+    if (tokens.length < 5) continue;
+    const source = tokens.pop();
+    const available = tokens.pop();
+    let version = tokens.pop();
+    if (tokens.at(-1) === "<" || tokens.at(-1) === ">") version = `${tokens.pop()} ${version}`;
+    const id = tokens.pop();
+    const item = {
+      name: tokens.join(" ").trim(),
+      id,
+      version,
+      available,
+      source
+    };
+    if (item.name && item.id && item.available && item.source) upgrades.push(item);
+  }
+  return upgrades;
+}
+
+async function monitorWindowsUpdates() {
+  if (!updateChecksEnabled("windows")) return { status: "disabled", count: 0, updates: [] };
+  const script = String.raw`
+$ErrorActionPreference = "Stop"
+$session = New-Object -ComObject Microsoft.Update.Session
+$searcher = $session.CreateUpdateSearcher()
+$result = $searcher.Search("IsInstalled=0 and IsHidden=0")
+$updates = @()
+foreach ($update in $result.Updates) {
+  $updates += [pscustomobject]@{
+    title = $update.Title
+    isDownloaded = $update.IsDownloaded
+    rebootRequired = $update.RebootRequired
+  }
+}
+[pscustomobject]@{ count=$result.Updates.Count; updates=$updates } | ConvertTo-Json -Depth 5 -Compress
+`;
+  const result = await runPowerShell(script, 90000);
+  if (!result.ok) return { status: "limited", count: 0, updates: [], error: result.error };
+  return { status: "active", count: Number(result.data.count || 0), updates: normalizeArray(result.data.updates) };
+}
+
+async function monitorWingetUpdates() {
+  if (!updateChecksEnabled("winget")) return { status: "disabled", upgrades: [] };
+  const configuredWinget = config.wingetPath || "winget.exe";
+  const discovered = await runPowerShell(String.raw`
+$path = Get-ChildItem 'C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_*\winget.exe' -ErrorAction SilentlyContinue |
+  Sort-Object FullName -Descending |
+  Select-Object -First 1 -ExpandProperty FullName
+[pscustomobject]@{ path=$path } | ConvertTo-Json -Compress
+`, 10000);
+  const candidates = [...new Set([configuredWinget, discovered.data?.path, "winget.exe"].filter(Boolean))];
+  let result = null;
+  let winget = configuredWinget;
+  for (const candidate of candidates) {
+    winget = candidate;
+    result = await runCommand(candidate, ["upgrade", "--accept-source-agreements", "--disable-interactivity"], __dirname, 120000);
+    if (result.ok || result.stdout) break;
+  }
+  if (!result?.ok && !result?.stdout) return { status: "limited", upgrades: [], error: result?.stderr || result?.error || "winget failed", winget };
+  return {
+    status: "active",
+    winget,
+    upgrades: parseWingetUpgrades(result.stdout),
+    rawSummary: String(result.stdout || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /\d+\s+upgrades?\s+available/i.test(line)).at(-1) || ""
+  };
+}
+
+async function monitorNpmOutdated(windows) {
+  if (!updateChecksEnabled("npm")) return { status: "disabled", workloads: [] };
+  const workloads = [];
+  for (const workload of configuredWorkloads(windows)) {
+    if (!workload.AppDirectory || !(await pathExists(path.join(workload.AppDirectory, "package.json")))) continue;
+    const result = process.platform === "win32"
+      ? await runCommand("cmd.exe", ["/d", "/s", "/c", "npm outdated --json"], workload.AppDirectory, 90000)
+      : await runCommand("npm", ["outdated", "--json"], workload.AppDirectory, 90000);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(result.stdout || "{}");
+    } catch {}
+    workloads.push({
+      workload: workload.DisplayName || workload.Name,
+      directory: workload.AppDirectory,
+      ok: result.ok || !!result.stdout,
+      error: result.stdout ? "" : (result.stderr || result.error || ""),
+      packages: Object.entries(parsed).map(([name, info]) => ({
+        name,
+        current: info.current,
+        wanted: info.wanted,
+        latest: info.latest,
+        type: info.type || ""
+      }))
+    });
+  }
+  return { status: workloads.length ? "active" : "limited", workloads };
+}
+
+async function monitorGitDrift(windows) {
+  if (!updateChecksEnabled("git")) return { status: "disabled", repos: [] };
+  const repos = [];
+  for (const workload of configuredWorkloads(windows)) {
+    if (!workload.AppDirectory || !(await pathExists(path.join(workload.AppDirectory, ".git")))) continue;
+    const safeDir = `safe.directory=${workload.AppDirectory.replaceAll("\\", "/")}`;
+    const status = await runCommand("git", ["-c", safeDir, "status", "--short", "--branch"], workload.AppDirectory, 30000);
+    const head = await runCommand("git", ["-c", safeDir, "rev-parse", "--short", "HEAD"], workload.AppDirectory, 30000);
+    const branch = await runCommand("git", ["-c", safeDir, "branch", "--show-current"], workload.AppDirectory, 30000);
+    repos.push({
+      workload: workload.DisplayName || workload.Name,
+      directory: workload.AppDirectory,
+      ok: status.ok,
+      branch: String(branch.stdout || "").trim(),
+      head: String(head.stdout || "").trim(),
+      status: String(status.stdout || status.stderr || status.error || "").trim()
+    });
+  }
+  return { status: repos.length ? "active" : "limited", repos };
+}
+
+async function monitorRuntimeVersions() {
+  if (!updateChecksEnabled("versions")) return { status: "disabled", commands: [] };
+  const commands = [];
+  for (const item of normalizeArray(config.versionCommands)) {
+    if (!item?.name || !item?.command) continue;
+    const result = await runCommand("cmd.exe", ["/d", "/c", item.command], currentAppRoot(), 30000);
+    commands.push({
+      name: item.name,
+      command: item.command,
+      ok: result.ok,
+      output: String(result.stdout || "").trim(),
+      error: String(result.stderr || result.error || "").trim()
+    });
+  }
+  return { status: commands.length ? "active" : "limited", commands };
+}
+
+async function monitorUpdateWatch(windows) {
+  const [windowsUpdates, winget, npmOutdated, gitDrift, versions] = await Promise.all([
+    safeSlowMonitor("windows updates", monitorWindowsUpdates, { count: 0, updates: [] }),
+    safeSlowMonitor("winget updates", monitorWingetUpdates, { upgrades: [] }),
+    safeSlowMonitor("npm outdated", () => monitorNpmOutdated(windows), { workloads: [] }),
+    safeSlowMonitor("git drift", () => monitorGitDrift(windows), { repos: [] }),
+    safeSlowMonitor("runtime versions", monitorRuntimeVersions, { commands: [] })
+  ]);
+  return {
+    status: "active",
+    capturedAt: new Date().toISOString(),
+    windows: windowsUpdates,
+    winget,
+    npmOutdated,
+    gitDrift,
+    versions
+  };
+}
+
 async function safeSlowMonitor(name, fn, fallback) {
   try {
     return await fn();
@@ -741,6 +936,20 @@ function summarizeSlowSecurity(monitors) {
     if (check.watchedPackages?.length) findings.push(slowFinding("warm", "Watched npm package present", `${check.workload}: lockfile contains ${check.watchedPackages.join(", ")}; verify pinned clean versions before installing.`));
   }
 
+  const updateWatch = monitors.updateWatch;
+  const windowsUpdateCount = Number(updateWatch?.windows?.count || 0);
+  const wingetCount = normalizeArray(updateWatch?.winget?.upgrades).length;
+  const npmOutdatedCount = normalizeArray(updateWatch?.npmOutdated?.workloads).reduce((sum, workload) => sum + normalizeArray(workload.packages).length, 0);
+  const gitBehind = normalizeArray(updateWatch?.gitDrift?.repos).filter((repo) => /\bbehind\b/i.test(repo.status || "")).length;
+  coverage.push(coverageItem("Update watch", updateWatch?.status || "limited", `${windowsUpdateCount} Windows update(s), ${wingetCount} winget upgrade(s), ${npmOutdatedCount} npm outdated package(s), ${gitBehind} repo(s) behind.`));
+  if (windowsUpdateCount) {
+    const securityUpdates = normalizeArray(updateWatch.windows.updates).filter((update) => /security|defender|malicious|cumulative/i.test(update.title || ""));
+    findings.push(slowFinding(securityUpdates.length ? "hot" : "warm", "Windows updates pending", `${windowsUpdateCount} Windows update(s) pending${securityUpdates.length ? ", including security-related updates" : ""}.`));
+  }
+  if (wingetCount) findings.push(slowFinding("warm", "winget upgrades available", `${wingetCount} package upgrade(s) available through winget.`));
+  if (npmOutdatedCount) findings.push(slowFinding("warm", "npm packages outdated", `${npmOutdatedCount} npm package(s) are behind wanted/latest versions.`));
+  if (gitBehind) findings.push(slowFinding("warm", "Git repos behind upstream", `${gitBehind} repo(s) report being behind their upstream branch.`));
+
   return { findings, coverage };
 }
 
@@ -756,7 +965,8 @@ async function runSlowSecurityMonitors(windows, force = false) {
       sysmon: await safeSlowMonitor("sysmon", monitorSysmonOrEdr, { services: [], sysmonEvents: [] }),
       backups: await safeSlowMonitor("backups", () => monitorBackups(windows), { roots: [] }),
       dependencyAudit: await safeSlowMonitor("dependency audit", () => monitorDependencyAudit(windows), { audits: [] }),
-      npmSupplyChain: await safeSlowMonitor("npm supply chain", () => monitorNpmSupplyChain(windows), { checks: [] })
+      npmSupplyChain: await safeSlowMonitor("npm supply chain", () => monitorNpmSupplyChain(windows), { checks: [] }),
+      updateWatch: await safeSlowMonitor("update watch", () => monitorUpdateWatch(windows), {})
     };
     const summary = summarizeSlowSecurity(monitors);
     slowSecurity = {
@@ -1329,6 +1539,7 @@ function mergeSlowSecurity(windows, slow) {
   windows.security.backups = slow.backups;
   windows.security.dependencyAudit = slow.dependencyAudit;
   windows.security.npmSupplyChain = slow.npmSupplyChain;
+  windows.security.updateWatch = slow.updateWatch;
   windows.security.slowSecurityCapturedAt = slow.capturedAt;
   return windows;
 }
@@ -1632,6 +1843,13 @@ async function handleAction(req, res, pathname) {
       slowSecurity.capturedAt = null;
       collect();
       sendJson(res, 202, { ok: true, message: "Security scan requested." });
+      return true;
+    }
+
+    if (pathname === "/api/actions/run-update-scan") {
+      slowSecurity.capturedAt = null;
+      collect();
+      sendJson(res, 202, { ok: true, message: "Update scan requested. Refresh HUD in a minute if results are still warming." });
       return true;
     }
   } catch (error) {

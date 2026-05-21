@@ -252,6 +252,60 @@ function renderCoverage(security = {}) {
   </div>`).join("") || `<div class="tip-row"><strong>No coverage map</strong><p>Coverage telemetry has not returned yet.</p></div>`;
 }
 
+function renderUpdateWatch(security = {}) {
+  const watch = security.updateWatch || {};
+  const windowsUpdates = Array.isArray(watch.windows?.updates) ? watch.windows.updates : [];
+  const winget = Array.isArray(watch.winget?.upgrades) ? watch.winget.upgrades : [];
+  const npmWorkloads = Array.isArray(watch.npmOutdated?.workloads) ? watch.npmOutdated.workloads : [];
+  const npmPackages = npmWorkloads.flatMap((workload) => (Array.isArray(workload.packages) ? workload.packages : []).map((pkg) => ({ workload: workload.workload, ...pkg })));
+  const repos = Array.isArray(watch.gitDrift?.repos) ? watch.gitDrift.repos : [];
+  const versions = Array.isArray(watch.versions?.commands) ? watch.versions.commands : [];
+  const pending = windowsUpdates.length + winget.length + npmPackages.length + repos.filter((repo) => /\bbehind\b/i.test(repo.status || "")).length;
+  $("updateCount").textContent = `${pending} pending`;
+
+  const rows = [
+    ...windowsUpdates.slice(0, 8).map((update) => ({
+      level: /security|defender|malicious|cumulative/i.test(update.title || "") ? "hot" : "warm",
+      type: "Windows",
+      title: update.title || "Pending update",
+      detail: update.rebootRequired ? "reboot required" : "available"
+    })),
+    ...winget.slice(0, 10).map((item) => ({
+      level: "warm",
+      type: "winget",
+      title: item.name || item.id,
+      detail: `${item.version || "?"} -> ${item.available || "?"}`
+    })),
+    ...npmPackages.slice(0, 12).map((item) => ({
+      level: "warm",
+      type: "npm",
+      title: `${item.workload}: ${item.name}`,
+      detail: `${item.current || "?"} -> ${item.wanted || item.latest || "?"}`
+    })),
+    ...repos.filter((repo) => /\bbehind\b/i.test(repo.status || "")).slice(0, 6).map((repo) => ({
+      level: "warm",
+      type: "Git",
+      title: repo.workload,
+      detail: repo.status
+    }))
+  ];
+
+  if (!rows.length && versions.length) {
+    rows.push(...versions.slice(0, 8).map((item) => ({
+      level: item.ok ? "cool" : "warm",
+      type: "Version",
+      title: item.name,
+      detail: item.output || item.error || item.command
+    })));
+  }
+
+  $("updates").innerHTML = rows.map((row) => `<div class="update-row ${esc(row.level)}">
+    <strong>${esc(row.type)}</strong>
+    <strong title="${esc(row.title)}">${esc(row.title)}</strong>
+    <span title="${esc(row.detail)}">${esc(row.detail)}</span>
+  </div>`).join("") || `<div class="tip-row"><strong>No update data yet</strong><p>Run Update Scan or wait for the slow monitors to finish.</p></div>`;
+}
+
 function renderReadiness(windows = {}) {
   const readiness = windows.rebootReadiness || {};
   const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
@@ -401,6 +455,7 @@ function setupActions() {
   $("caddyValidateBtn")?.addEventListener("click", () => postAction("/api/actions/caddy-validate", {}, "Caddy validate"));
   $("tabletReadinessBtn")?.addEventListener("click", () => postAction("/api/actions/tablet-readiness", {}, "Tablet readiness"));
   $("scanBtn")?.addEventListener("click", () => postAction("/api/actions/run-security-scan", {}, "Security scan"));
+  $("updateScanBtn")?.addEventListener("click", () => postAction("/api/actions/run-update-scan", {}, "Update scan"));
   $("logonBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
   $("refreshHudBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
   $("applyProfileBtn")?.addEventListener("click", async () => {
@@ -423,6 +478,7 @@ function render(data) {
   renderSecurity(data.windows?.security);
   renderBlockedIps(data.windows?.security);
   renderCoverage(data.windows?.security);
+  renderUpdateWatch(data.windows?.security);
   renderReadiness(data.windows);
   renderLogIntel(data.windows?.security);
   renderAlertLog(data.windows?.security);

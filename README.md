@@ -60,7 +60,22 @@ Useful config fields:
 - `managedServices`: allow-listed Windows services shown in the Operator Console.
 - `requiredServices` and `requiredPorts`: reboot-readiness expectations.
 - `appRoot`, `healthUrl`, `caddyConfigPath`: app-specific diagnostic actions.
+- `wingetPath`: optional full path to `winget.exe` when the HUD runs as SYSTEM.
+- `versionCommands`: read-only commands for showing runtime versions such as Node, npm, Git, Caddy, or PostgreSQL.
+- `updateChecks`: toggles for Windows Update, winget, npm outdated, Git drift, and version probes.
 - `quickLinks`: buttons shown in the Operator Console.
+
+## Update Detection
+
+MasterHUD detects updates but does not install them automatically.
+
+- Windows Update: uses the local Microsoft Update COM API and reports pending visible updates.
+- winget: runs `winget upgrade` and parses available package upgrades.
+- npm: runs `npm outdated --json` for configured app workloads.
+- Git: checks configured workload repos for dirty/ahead/behind status.
+- Runtime versions: runs configured version commands and displays the current tool versions.
+
+Use the `Update Scan` button in the Operator Console to refresh this data on demand. Do installs manually during a maintenance window after checking backups and service health.
 
 ## What It Watches
 

@@ -37,6 +37,32 @@
     "C:\\Program Files\\Caddy\\caddy.exe",
     "C:\\caddy\\caddy.exe"
   ],
+  "wingetPath": "winget.exe",
+  "versionCommands": [
+    {
+      "name": "Node.js",
+      "command": "node --version"
+    },
+    {
+      "name": "npm",
+      "command": "npm --version"
+    },
+    {
+      "name": "Git",
+      "command": "git --version"
+    },
+    {
+      "name": "Caddy",
+      "command": "caddy version"
+    }
+  ],
+  "updateChecks": {
+    "windows": true,
+    "winget": true,
+    "npm": true,
+    "git": true,
+    "versions": true
+  },
   "tabletReadinessCommand": "",
   "quickLinks": [
     {
