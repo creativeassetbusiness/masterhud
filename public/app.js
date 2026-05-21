@@ -441,6 +441,45 @@ async function postAction(path, payload = {}, label = "Action") {
   }
 }
 
+function setupSectionMenu() {
+  const links = Array.from(document.querySelectorAll(".section-links a"));
+  const jump = $("sectionJump");
+  const sections = links
+    .map((link) => document.querySelector(link.hash))
+    .filter(Boolean);
+
+  const setActive = (hash) => {
+    links.forEach((link) => link.classList.toggle("active", link.hash === hash));
+    if (jump && Array.from(jump.options).some((option) => option.value === hash)) {
+      jump.value = hash;
+    }
+  };
+
+  jump?.addEventListener("change", () => {
+    const target = document.querySelector(jump.value);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActive(jump.value);
+    }
+  });
+
+  links.forEach((link) => {
+    link.addEventListener("click", () => setActive(link.hash));
+  });
+
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+      if (visible) setActive(`#${visible.target.id}`);
+    }, { rootMargin: "-64px 0px -72% 0px", threshold: 0.01 });
+    sections.forEach((section) => observer.observe(section));
+  }
+
+  setActive(window.location.hash || "#overview");
+}
+
 function setupActions() {
   $("blockIpBtn")?.addEventListener("click", () => postAction("/api/actions/block-ip", { ip: $("ipInput").value.trim() }, "Block IP"));
   $("unblockIpBtn")?.addEventListener("click", () => postAction("/api/actions/unblock-ip", { ip: $("ipInput").value.trim() }, "Unblock IP"));
@@ -495,6 +534,7 @@ function render(data) {
   renderRecommendations(data.recommendations);
 }
 
+setupSectionMenu();
 setupActions();
 loadOperatorConfig();
 

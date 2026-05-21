@@ -19,7 +19,51 @@
         </div>
       </header>
 
-      <section class="kpi-grid" aria-label="System pressure">
+      <nav class="section-menu" aria-label="Dashboard sections">
+        <label class="section-jump-label" for="sectionJump">Jump</label>
+        <select id="sectionJump" class="section-jump" aria-label="Jump to section">
+          <option value="#overview">Overview</option>
+          <option value="#operator">Operator</option>
+          <option value="#updates-panel">Updates</option>
+          <option value="#security-panel">Security</option>
+          <option value="#coverage-panel">Coverage</option>
+          <option value="#readiness-panel">Reboot</option>
+          <option value="#services-panel">Services</option>
+          <option value="#workloads-panel">Apps</option>
+          <option value="#ports-panel">Ports</option>
+          <option value="#connections-panel">Connections</option>
+          <option value="#process-panel">Processes</option>
+          <option value="#storage-panel">Storage</option>
+          <option value="#drift-panel">Drift</option>
+          <option value="#startup-panel">Startup</option>
+          <option value="#logs-panel">Logs</option>
+          <option value="#alerts-panel">Alerts</option>
+          <option value="#faults-panel">Faults</option>
+          <option value="#radar-panel">Radar</option>
+        </select>
+        <div id="sectionLinks" class="section-links">
+          <a href="#overview">Overview</a>
+          <a href="#operator">Operator</a>
+          <a href="#updates-panel">Updates</a>
+          <a href="#security-panel">Security</a>
+          <a href="#coverage-panel">Coverage</a>
+          <a href="#readiness-panel">Reboot</a>
+          <a href="#services-panel">Services</a>
+          <a href="#workloads-panel">Apps</a>
+          <a href="#ports-panel">Ports</a>
+          <a href="#connections-panel">Connections</a>
+          <a href="#process-panel">Processes</a>
+          <a href="#storage-panel">Storage</a>
+          <a href="#drift-panel">Drift</a>
+          <a href="#startup-panel">Startup</a>
+          <a href="#logs-panel">Logs</a>
+          <a href="#alerts-panel">Alerts</a>
+          <a href="#faults-panel">Faults</a>
+          <a href="#radar-panel">Radar</a>
+        </div>
+      </nav>
+
+      <section id="overview" class="kpi-grid section-anchor" aria-label="System pressure">
         <article class="meter" data-kind="cpu">
           <div class="meter-head"><span>CPU</span><strong id="cpuValue">--%</strong></div>
           <div class="bar"><i id="cpuBar"></i></div>
@@ -43,7 +87,7 @@
       </section>
 
       <section class="main-grid">
-        <section class="panel span-2">
+        <section id="security-panel" class="panel span-2 section-anchor">
           <div class="panel-head">
             <h2>Security Watch</h2>
             <span id="securityCount">-- signals</span>
@@ -51,7 +95,7 @@
           <div id="security" class="security-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="coverage-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Security Coverage</h2>
             <span id="coverageCount">-- layers</span>
@@ -59,7 +103,7 @@
           <div id="coverage" class="coverage-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="updates-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Update Watch</h2>
             <span id="updateCount">-- pending</span>
@@ -67,7 +111,7 @@
           <div id="updates" class="update-list"></div>
         </section>
 
-        <section class="panel operator-panel">
+        <section id="operator" class="panel operator-panel section-anchor">
           <div class="panel-head">
             <h2>Operator Console</h2>
             <span id="actionStatus">idle</span>
@@ -106,7 +150,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section id="readiness-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Reboot Readiness</h2>
             <span id="readinessCount">-- ready</span>
@@ -114,7 +158,7 @@
           <div id="readiness" class="readiness-list"></div>
         </section>
 
-        <section class="panel process-panel">
+        <section id="process-panel" class="panel process-panel section-anchor">
           <div class="panel-head">
             <h2>Process Labels</h2>
             <span id="processCount">-- tracked</span>
@@ -122,7 +166,7 @@
           <div id="processes" class="process-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="storage-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Volumes</h2>
             <span>free space</span>
@@ -130,7 +174,7 @@
           <div id="volumes" class="volume-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="ports-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Listening Ports</h2>
             <span id="portCount">-- open</span>
@@ -138,7 +182,7 @@
           <div id="ports" class="port-grid"></div>
         </section>
 
-        <section class="panel">
+        <section id="connections-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Active Connections</h2>
             <span id="connectionCount">-- live</span>
@@ -146,7 +190,7 @@
           <div id="connections" class="connection-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="services-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Service Footprint</h2>
             <span id="serviceCount">-- running</span>
@@ -154,7 +198,7 @@
           <div id="services" class="service-list"></div>
         </section>
 
-        <section class="panel span-2">
+        <section id="workloads-panel" class="panel span-2 section-anchor">
           <div class="panel-head">
             <h2>Detected Workloads</h2>
             <span id="workloadCount">-- apps</span>
@@ -162,7 +206,7 @@
           <div id="workloads" class="workload-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="drift-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Drift Sentinel</h2>
             <span id="driftCount">-- checks</span>
@@ -170,7 +214,7 @@
           <div id="drift" class="drift-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="startup-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Startup Surface</h2>
             <span id="startupCount">-- entries</span>
@@ -178,7 +222,7 @@
           <div id="startup" class="startup-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="logs-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Log Intelligence</h2>
             <span id="logIntelCount">-- logs</span>
@@ -186,7 +230,7 @@
           <div id="logIntel" class="log-list"></div>
         </section>
 
-        <section class="panel">
+        <section id="alerts-panel" class="panel section-anchor">
           <div class="panel-head">
             <h2>Alert Trail</h2>
             <span id="alertCount">-- alerts</span>
@@ -194,7 +238,7 @@
           <div id="alertLog" class="alert-list"></div>
         </section>
 
-        <section class="panel span-2">
+        <section id="faults-panel" class="panel span-2 section-anchor">
           <div class="panel-head">
             <h2>Recent Faults</h2>
             <span>last 6 hours</span>
@@ -202,7 +246,7 @@
           <div id="events" class="event-list"></div>
         </section>
 
-        <section class="panel span-2">
+        <section id="radar-panel" class="panel span-2 section-anchor">
           <div class="panel-head">
             <h2>Optimization Radar</h2>
             <span>no quality tradeoffs</span>
