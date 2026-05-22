@@ -55,6 +55,8 @@ Then select the profile from the Operator Console, or preselect one by creating 
 
 Profile files are ignored by Git except `*.example.json`, so every VPS can keep its own client paths, domains, services, and quick links while sharing the same public MasterHUD code.
 
+Selecting a profile in the HUD only stages it. Settings remain on the active profile until `Use Profile` is confirmed.
+
 Useful config fields:
 
 - `publicUrls`: public sites to check for uptime and TLS expiry only when `allowRemoteChecks` is enabled.

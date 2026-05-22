@@ -13,6 +13,12 @@ const fmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const intFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 let operatorConfig = { quickLinks: [], managedServices: [], profiles: [], profile: { active: "" } };
 
+function profileLabel(profileName) {
+  if (!profileName) return "Default";
+  const profile = (operatorConfig.profiles || []).find((item) => item.name === profileName);
+  return profile?.label || profileName;
+}
+
 function esc(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -372,14 +378,16 @@ function renderRecommendations(tips = []) {
 
 function renderOperatorConfig() {
   const profiles = Array.isArray(operatorConfig.profiles) ? operatorConfig.profiles : [];
+  const activeProfile = operatorConfig.profile?.active || "";
   $("profileSelect").innerHTML = [
     `<option value="">Default config</option>`,
     ...profiles.map((profile) => {
       const suffix = profile.example ? " (example)" : "";
-      const selected = profile.name === operatorConfig.profile?.active ? " selected" : "";
+      const selected = profile.name === activeProfile ? " selected" : "";
       return `<option value="${esc(profile.name)}"${selected}>${esc(profile.label || profile.name)}${suffix}</option>`;
     })
   ].join("");
+  renderProfileSwitchNotice();
 
   const links = Array.isArray(operatorConfig.quickLinks) ? operatorConfig.quickLinks : [];
   $("quickLinks").innerHTML = links.map((link) => `<a class="button-link" href="${esc(link.href)}" target="_blank" rel="noopener">${esc(link.label || link.href)}</a>`).join("")
@@ -391,6 +399,26 @@ function renderOperatorConfig() {
     const label = typeof service === "string" ? service : service.label || service.name;
     return `<option value="${esc(value)}">${esc(label)}</option>`;
   }).join("");
+}
+
+function renderProfileSwitchNotice() {
+  const selectedProfile = $("profileSelect")?.value || "";
+  const activeProfile = operatorConfig.profile?.active || "";
+  const pending = selectedProfile !== activeProfile;
+  const selectedLabel = profileLabel(selectedProfile);
+  const activeLabel = profileLabel(activeProfile);
+  const notice = $("profileSwitchNotice");
+  if (notice) {
+    notice.classList.toggle("pending", pending);
+    notice.textContent = pending
+      ? `Pending profile: ${selectedLabel}. Active settings still use ${activeLabel}.`
+      : `Active settings: ${activeLabel}`;
+  }
+  const button = $("applyProfileBtn");
+  if (button) {
+    button.disabled = !pending;
+    button.textContent = pending ? "Use Profile" : "Active";
+  }
 }
 
 async function loadOperatorConfig() {
@@ -582,8 +610,33 @@ function setupActions() {
   });
   $("appGuardBlockerBtn")?.addEventListener("click", () => postAction("/api/actions/run-logon-blocker", {}, "Failed-logon blocker"));
   $("appGuardRefreshBtn")?.addEventListener("click", () => postAction("/api/actions/refresh-snapshot", {}, "Refresh HUD"));
+  $("profileSelect")?.addEventListener("change", () => {
+    const selectedProfile = $("profileSelect").value || "";
+    const activeProfile = operatorConfig.profile?.active || "";
+    renderProfileSwitchNotice();
+    if (selectedProfile !== activeProfile) {
+      $("actionStatus").textContent = "pending";
+      $("actionOutput").textContent = `Profile selected, settings not switched. Active settings still use ${profileLabel(activeProfile)}.`;
+    } else {
+      $("actionStatus").textContent = "idle";
+      $("actionOutput").textContent = `Profile selection matches active settings: ${profileLabel(activeProfile)}.`;
+    }
+  });
   $("applyProfileBtn")?.addEventListener("click", async () => {
-    await postAction("/api/actions/set-profile", { profile: $("profileSelect").value }, "Switch profile");
+    const selectedProfile = $("profileSelect").value || "";
+    const activeProfile = operatorConfig.profile?.active || "";
+    if (selectedProfile === activeProfile) {
+      renderProfileSwitchNotice();
+      return;
+    }
+    if (!window.confirm(`Switch active settings from ${profileLabel(activeProfile)} to ${profileLabel(selectedProfile)}?`)) {
+      $("profileSelect").value = activeProfile;
+      renderProfileSwitchNotice();
+      $("actionStatus").textContent = "idle";
+      $("actionOutput").textContent = `Profile switch canceled. Active settings still use ${profileLabel(activeProfile)}.`;
+      return;
+    }
+    await postAction("/api/actions/set-profile", { profile: selectedProfile }, "Switch profile");
     await loadOperatorConfig();
   });
   $("blockedIpList")?.addEventListener("click", (event) => {

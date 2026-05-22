@@ -716,6 +716,22 @@ canvas {
   gap: 6px;
 }
 
+.profile-switch-notice {
+  min-height: 28px;
+  padding: 6px 8px;
+  border-left: 4px solid var(--green);
+  background: rgba(53, 208, 127, 0.08);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.profile-switch-notice.pending {
+  border-left-color: var(--yellow);
+  background: rgba(232, 191, 75, 0.1);
+  color: var(--text);
+}
+
 .quick-links,
 .tool-grid {
   display: grid;
