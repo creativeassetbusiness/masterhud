@@ -23,8 +23,11 @@ Optional knobs:
 ```powershell
 $env:PORT=3999
 $env:SAMPLE_MS=3000
+$env:WINDOWS_DEEP_INSPECTION_MS=120000
 npm start
 ```
+
+The HUD loads live telemetry first, then refreshes heavier Windows inspection data such as firewall exposure, Defender status, startup inventory, VM memory checks, and event-log security findings in the background.
 
 ## Configure Client Profiles
 

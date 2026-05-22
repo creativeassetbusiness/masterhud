@@ -22,6 +22,7 @@ const activeProfilePath = path.join(dataDir, "active-profile.json");
 const port = Number(process.env.PORT || 3927);
 const sampleMs = Number(process.env.SAMPLE_MS || 5000);
 const slowSecurityMs = Number(process.env.SLOW_SECURITY_MS || 10 * 60 * 1000);
+const windowsDeepInspectionMs = Number(process.env.WINDOWS_DEEP_INSPECTION_MS || 2 * 60 * 1000);
 const windowsSnapshotTimeoutMs = Number(process.env.WINDOWS_SNAPSHOT_TIMEOUT_MS || 120000);
 const powerShellExe = process.env.MASTERHUD_POWERSHELL || "powershell.exe";
 
@@ -140,6 +141,16 @@ let clients = new Set();
 let collecting = false;
 let lastHistoryAt = 0;
 const alertDedup = new Map();
+let deepWindowsInspection = {
+  capturedAt: null,
+  running: false,
+  security: null,
+  vmMemory: null,
+  scheduledTasks: [],
+  startupCommands: [],
+  events: [],
+  workloads: []
+};
 let slowSecurity = {
   capturedAt: null,
   running: false,
@@ -1355,10 +1366,12 @@ async function runSlowSecurityMonitors(windows, force = false) {
   return slowSecurity;
 }
 
-async function windowsSnapshot() {
+async function windowsSnapshot(options = {}) {
+  const fastOnly = options.fastOnly === true;
   const script = String.raw`
 $ErrorActionPreference = "SilentlyContinue"
 $WarningPreference = "SilentlyContinue"
+$FastOnly = ${fastOnly ? "$true" : "$false"}
 $nics = Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface |
   Where-Object { $_.Name -notmatch "Loopback|isatap|Teredo" } |
   Select-Object Name, BytesReceivedPersec, BytesSentPersec, PacketsReceivedErrors, PacketsOutboundErrors
@@ -1372,6 +1385,15 @@ $volumes = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
 
 $servicesAll = Get-CimInstance Win32_Service |
   Select-Object Name, DisplayName, State, StartMode, ProcessId, PathName
+
+$servicesByPid = @{}
+foreach ($svc in $servicesAll) {
+  $servicePid = [int]$svc.ProcessId
+  if ($servicePid -gt 0) {
+    if (-not $servicesByPid.ContainsKey($servicePid)) { $servicesByPid[$servicePid] = @() }
+    $servicesByPid[$servicePid] += $svc
+  }
+}
 
 $procRuntime = @{}
 Get-Process | ForEach-Object { $procRuntime[$_.Id] = $_ }
@@ -1435,12 +1457,12 @@ $procs = Get-Process |
   $runtime = $_
   $processId = [int]$runtime.Id
   $cim = $procCim[$processId]
-  $ownedServices = @($servicesAll | Where-Object { [int]$_.ProcessId -eq $processId })
+  $ownedServices = @($servicesByPid[$processId])
   $parent = if ($cim) { $procRuntime[[int]$cim.ParentProcessId] } else { $null }
-  $parentServices = if ($cim -and [int]$cim.ParentProcessId -gt 0) { @($servicesAll | Where-Object { [int]$_.ProcessId -eq [int]$cim.ParentProcessId }) } else { @() }
+  $parentServices = if ($cim -and [int]$cim.ParentProcessId -gt 0) { @($servicesByPid[[int]$cim.ParentProcessId]) } else { @() }
   $version = $null
   $exePath = if ($cim -and $cim.ExecutablePath) { $cim.ExecutablePath } elseif ($runtime.Path) { $runtime.Path } else { $null }
-  if ($exePath -and (Test-Path -LiteralPath $exePath)) {
+  if (-not $FastOnly -and $exePath -and (Test-Path -LiteralPath $exePath)) {
     $version = (Get-Item -LiteralPath $exePath).VersionInfo
   }
   $reason = "Process"
@@ -1477,14 +1499,12 @@ $procs = Get-Process |
 }
 
 $ports = Get-NetTCPConnection -State Listen |
-  Sort-Object LocalPort |
   Select-Object -First 120 LocalAddress, LocalPort, OwningProcess,
-    @{Name="ProcessName";Expression={(Get-Process -Id $_.OwningProcess).ProcessName}}
+    @{Name="ProcessName";Expression={$procRuntime[[int]$_.OwningProcess].ProcessName}}
 
 $connections = Get-NetTCPConnection -State Established |
-  Sort-Object RemoteAddress, RemotePort |
   Select-Object -First 120 LocalAddress, LocalPort, RemoteAddress, RemotePort, OwningProcess,
-    @{Name="ProcessName";Expression={(Get-Process -Id $_.OwningProcess).ProcessName}}
+    @{Name="ProcessName";Expression={$procRuntime[[int]$_.OwningProcess].ProcessName}}
 
 $services = $servicesAll |
   Where-Object { $_.State -eq "Running" -and $_.StartMode -eq "Auto" } |
@@ -1534,7 +1554,8 @@ function Get-RecentAppFiles($AppDirectory) {
     Select-Object -First 12 @{Name="Path";Expression={$_.FullName}}, Length, @{Name="LastWriteTime";Expression={$_.LastWriteTimeUtc.ToString("o")}}
 }
 
-$workloads = foreach ($svc in $servicesAll) {
+$appServiceCandidates = @($servicesAll | Where-Object { $_.PathName -match "\\apps\\|nssm.exe|node.exe|caddy.exe|postgres" })
+$workloads = foreach ($svc in $appServiceCandidates) {
   $base = "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)"
   $paramsPath = "$base\Parameters"
   $params = $null
@@ -1595,6 +1616,39 @@ $workloads = foreach ($svc in $servicesAll) {
       RecentChanges = $recentChanges
     }
   }
+}
+
+if ($FastOnly) {
+  [pscustomobject]@{
+    capturedAt = (Get-Date).ToUniversalTime().ToString("o")
+    network = $nics
+    disks = $disks
+    volumes = $volumes
+    processes = $procs
+    ports = $ports
+    connections = $connections
+    services = $services
+    workloads = $workloads
+    vmMemory = $null
+    scheduledTasks = @()
+    startupCommands = @()
+    security = [pscustomobject]@{
+      findings = @()
+      coverage = @(
+        [pscustomobject]@{
+          Name="Deep Windows inspection"
+          Status="limited"
+          Detail="Firewall, Defender, startup, event-log, and VM memory checks are warming up in the background."
+        }
+      )
+    }
+    events = @()
+    deepInspection = [pscustomobject]@{
+      Status="warming"
+      Detail="Live telemetry is loaded; deeper Windows inspection is running separately."
+    }
+  } | ConvertTo-Json -Depth 8 -Compress -WarningAction SilentlyContinue
+  return
 }
 
 $masterTasks = Get-ScheduledTask -TaskName "MasterHUD","MasterHUD-FailedLogonBlocker" -ErrorAction SilentlyContinue |
@@ -1802,6 +1856,10 @@ $events = Get-WinEvent -FilterHashtable @{LogName=@("System","Application"); Lev
   vmMemory = $vmMemory
   scheduledTasks = $scheduledTasks
   startupCommands = $startupCommands
+  deepInspection = [pscustomobject]@{
+    Status="active"
+    Detail="Deep Windows inspection completed."
+  }
   security = [pscustomobject]@{
     findings = $securityFindings
     firewallExposure = $firewallExposure
@@ -1833,6 +1891,7 @@ $events = Get-WinEvent -FilterHashtable @{LogName=@("System","Application"); Lev
     vmMemory: result.data.vmMemory || null,
     scheduledTasks: normalizeArray(result.data.scheduledTasks),
     startupCommands: normalizeArray(result.data.startupCommands),
+    deepInspection: result.data.deepInspection || null,
     security: {
       ...(result.data.security || {}),
       findings: normalizeArray(result.data.security?.findings),
@@ -1846,6 +1905,65 @@ $events = Get-WinEvent -FilterHashtable @{LogName=@("System","Application"); Lev
     },
     events: normalizeArray(result.data.events)
   };
+}
+
+function mergeDeepWindowsInspection(windows, inspection) {
+  if (!inspection?.capturedAt) return windows;
+  windows.vmMemory = inspection.vmMemory || windows.vmMemory;
+  windows.scheduledTasks = normalizeArray(inspection.scheduledTasks);
+  windows.startupCommands = normalizeArray(inspection.startupCommands);
+  windows.events = normalizeArray(inspection.events);
+  windows.deepInspection = {
+    Status: inspection.error ? "limited" : "active",
+    Detail: inspection.error ? inspection.error : `Deep Windows inspection completed ${new Date(inspection.capturedAt).toLocaleTimeString()}.`,
+    capturedAt: inspection.capturedAt
+  };
+  if (inspection.workloads?.length) windows.workloads = inspection.workloads;
+  if (inspection.security) {
+    windows.security = {
+      ...inspection.security,
+      deepInspectionCapturedAt: inspection.capturedAt
+    };
+  }
+  return windows;
+}
+
+async function runDeepWindowsInspection(force = false) {
+  if (deepWindowsInspection.running) return deepWindowsInspection;
+  if (!force && deepWindowsInspection.capturedAt && Date.now() - Date.parse(deepWindowsInspection.capturedAt) < windowsDeepInspectionMs) {
+    return deepWindowsInspection;
+  }
+  deepWindowsInspection = { ...deepWindowsInspection, running: true };
+  const snapshot = await windowsSnapshot({ fastOnly: false });
+  if (snapshot.error) {
+    deepWindowsInspection = {
+      capturedAt: new Date().toISOString(),
+      running: false,
+      error: snapshot.error,
+      security: {
+        findings: [slowFinding("warm", "Deep Windows inspection failed", snapshot.error)],
+        coverage: [coverageItem("Deep Windows inspection", "limited", snapshot.error)]
+      },
+      vmMemory: null,
+      scheduledTasks: [],
+      startupCommands: [],
+      events: [],
+      workloads: []
+    };
+    return deepWindowsInspection;
+  }
+  deepWindowsInspection = {
+    capturedAt: snapshot.capturedAt || new Date().toISOString(),
+    running: false,
+    error: "",
+    security: snapshot.security || null,
+    vmMemory: snapshot.vmMemory || null,
+    scheduledTasks: normalizeArray(snapshot.scheduledTasks),
+    startupCommands: normalizeArray(snapshot.startupCommands),
+    events: normalizeArray(snapshot.events),
+    workloads: normalizeArray(snapshot.workloads)
+  };
+  return deepWindowsInspection;
 }
 
 function deriveRates(snapshot) {
@@ -1936,6 +2054,7 @@ function computeRebootReadiness(windows = {}) {
   const checks = [];
   const services = new Map(normalizeArray(windows.services).map((service) => [String(service.Name || "").toLowerCase(), service]));
   const workloads = new Map(normalizeArray(windows.workloads).map((workload) => [String(workload.Name || "").toLowerCase(), workload]));
+  const tasksAvailable = windows.deepInspection?.Status !== "warming" && Array.isArray(windows.scheduledTasks);
   const tasks = new Map(normalizeArray(windows.scheduledTasks).map((task) => [String(task.TaskName || "").toLowerCase(), task]));
   const requiredServices = normalizeArray(config.requiredServices).filter(Boolean);
 
@@ -1955,8 +2074,8 @@ function computeRebootReadiness(windows = {}) {
     const task = tasks.get(name.toLowerCase());
     checks.push({
       Name: `${name} boot task`,
-      Status: task ? "ok" : "bad",
-      Detail: task ? `Scheduled task is ${task.State || "present"} at ${task.TaskPath || "\\"}.` : "Scheduled boot task was not returned by Windows."
+      Status: !tasksAvailable ? "warn" : task ? "ok" : "bad",
+      Detail: !tasksAvailable ? "Scheduled task inventory is still warming up in the background." : task ? `Scheduled task is ${task.State || "present"} at ${task.TaskPath || "\\"}.` : "Scheduled boot task was not returned by Windows."
     });
   }
 
@@ -1983,8 +2102,21 @@ async function collect() {
   if (collecting) return;
   collecting = true;
   try {
-    const windows = await windowsSnapshot();
+    const windows = await windowsSnapshot({ fastOnly: true });
+    mergeDeepWindowsInspection(windows, deepWindowsInspection);
     mergeSlowSecurity(windows, slowSecurity);
+    runDeepWindowsInspection().catch((error) => {
+      deepWindowsInspection = {
+        ...deepWindowsInspection,
+        capturedAt: new Date().toISOString(),
+        running: false,
+        error: error.message,
+        security: {
+          findings: [slowFinding("warm", "Deep Windows inspection failed", error.message)],
+          coverage: [coverageItem("Deep Windows inspection", "limited", error.message)]
+        }
+      };
+    });
     runSlowSecurityMonitors(windows).catch((error) => {
       slowSecurity = {
         ...slowSecurity,
@@ -2118,6 +2250,7 @@ async function handleAction(req, res, pathname) {
       await writeJsonFile(activeProfilePath, { profile, updatedAt: new Date().toISOString() });
       await reloadConfig();
       slowSecurity.capturedAt = null;
+      deepWindowsInspection.capturedAt = null;
       collect();
       sendJson(res, 200, { ok: true, message: profile ? `Active profile switched to ${profile}.` : "Active profile reset to default config.", profile: config.profile });
       return true;
@@ -2245,6 +2378,7 @@ async function handleAction(req, res, pathname) {
 
     if (pathname === "/api/actions/run-security-scan") {
       slowSecurity.capturedAt = null;
+      deepWindowsInspection.capturedAt = null;
       collect();
       sendJson(res, 202, { ok: true, message: "Security scan requested." });
       return true;
@@ -2252,6 +2386,7 @@ async function handleAction(req, res, pathname) {
 
     if (pathname === "/api/actions/run-update-scan") {
       slowSecurity.capturedAt = null;
+      deepWindowsInspection.capturedAt = null;
       collect();
       sendJson(res, 202, { ok: true, message: "Update scan requested. Refresh HUD in a minute if results are still warming." });
       return true;
